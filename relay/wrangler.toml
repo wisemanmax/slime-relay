@@ -1,0 +1,13 @@
+name = "slime-relay"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+# KV holds the live server heartbeats. Create it once, then paste the id below:
+#   npx wrangler kv namespace create SERVERS
+kv_namespaces = [
+  { binding = "SERVERS", id = "PASTE_KV_NAMESPACE_ID_HERE" }
+]
+
+# RELAY_TOKEN is a secret, NOT set here. Set it with:
+#   npx wrangler secret put RELAY_TOKEN
+# (use the same value as SLIME_TOKEN on your servers / in the app)

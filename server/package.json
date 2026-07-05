@@ -1,0 +1,18 @@
+{
+  "name": "slimewatch-extractor",
+  "version": "1.1.0",
+  "description": "SlimeWatch stream extractor + relay heartbeat. Runs on macOS, Windows, or Linux.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "postinstall": "playwright install chromium"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}
