@@ -106,7 +106,19 @@ boxes are skipped. Lower a machine's ceiling by editing `SESSION_CAP` in
 - This repo is **private**; share by adding collaborators.
 - Reachability is provided by your LAN / mesh VPN, not by port-forwarding.
 
-## Roadmap
+## Point the Apple TV app at it
 
-- **Part 2 (app side):** SlimeWatch tvOS asks the relay for live servers and
-  fails over between them automatically, instead of a single hard-coded host.
+On the Apple TV: **SlimeWatch → Settings → Relay** → paste your relay URL →
+**Discover servers**. The app then streams through whichever server is
+**reachable and least busy** and fails over automatically if one drops. The
+single-host field is only used when no relay is set. (Make sure your token
+matches the one baked into the app.)
+
+See **[INSTRUCTIONS.md](INSTRUCTIONS.md)** for the full copy-paste walkthrough
+and troubleshooting.
+
+## Status
+
+- ✅ Cross-platform extractor with relay heartbeat (macOS / Windows / Linux)
+- ✅ Cloudflare relay + live dashboard
+- ✅ **App auto-routes to the best server** (reachable + lowest load, with failover)
