@@ -17,35 +17,30 @@ Call this value `TOKEN` below.
 
 The relay is a free Cloudflare Worker. You need a (free) Cloudflare account.
 
+### Easiest: one command
+
+```bash
+cd relay
+./deploy.sh <TOKEN>          # Windows: ./deploy.ps1 <TOKEN>
+```
+
+It installs wrangler, opens the browser for you to log in, creates the KV store,
+wires it into `wrangler.toml`, sets the secret, and deploys — then prints your URL.
+
+### Or step by step
+
 ```bash
 cd relay
 npm install
 npx wrangler login                       # opens your browser, click Allow
+npx wrangler kv namespace create SERVERS # copy the printed id…
+#   …paste it into wrangler.toml in place of PASTE_KV_NAMESPACE_ID_HERE
+npx wrangler secret put RELAY_TOKEN      # paste your TOKEN
+npm run deploy                           # prints your URL
 ```
 
-Create the KV store and copy the id it prints:
-
-```bash
-npx wrangler kv namespace create SERVERS
-# → prints:  id = "abc123..."   ← copy that
-```
-
-Open `relay/wrangler.toml` and paste the id in place of `PASTE_KV_NAMESPACE_ID_HERE`.
-
-Set the shared secret (paste your `TOKEN` when prompted):
-
-```bash
-npx wrangler secret put RELAY_TOKEN
-```
-
-Deploy:
-
-```bash
-npm run deploy
-# → prints your URL, e.g.  https://slime-relay.yourname.workers.dev
-```
-
-Call this URL `RELAY`. Open the dashboard to confirm it's live:
+Either way you get a URL like `https://slime-relay.yourname.workers.dev`. Call it
+`RELAY`. Open the dashboard to confirm it's live:
 
 ```
 https://<RELAY>/?key=<TOKEN>
