@@ -164,14 +164,16 @@ function nodeGetJSON(u, timeoutMs = 55000) {
 // any title by TMDB id. Set SLIME_SUBS_KEY in the server env to enable.
 const SUBS_KEY = process.env.SLIME_SUBS_KEY || '';
 
-// External subtitles by TMDB id (independent of the video provider). Uses the
-// Wyzie subtitle index when a key is configured; degrades to none otherwise.
+// External subtitles by TMDB id (independent of the video provider). The Wyzie
+// index (sub.wyzie.io) is free and needs no key, so subtitles are ON by default;
+// a SLIME_SUBS_KEY is passed through only if one happens to be set.
 async function fetchSubtitles(params) {
   const tmdb = params.get('tmdb');
-  if (!tmdb || !SUBS_KEY) return [];
+  if (!tmdb) return [];
   const kind = params.get('kind') || 'movie';
   const season = params.get('season'), episode = params.get('episode');
-  let u = `https://sub.wyzie.io/search?id=${encodeURIComponent(tmdb)}&format=srt&key=${encodeURIComponent(SUBS_KEY)}`;
+  let u = `https://sub.wyzie.io/search?id=${encodeURIComponent(tmdb)}&format=srt`;
+  if (SUBS_KEY) u += `&key=${encodeURIComponent(SUBS_KEY)}`;
   if (kind !== 'movie' && season && episode) u += `&season=${season}&episode=${episode}`;
   const list = await nodeGetJSON(u);
   if (!Array.isArray(list)) return [];
@@ -624,8 +626,14 @@ const server = http.createServer(async (req, res) => {
       if (!sub) { res.writeHead(404); return res.end('gone'); }
       let body = await nodeGetText(sub.url);
       if (!body) { res.writeHead(502); return res.end('sub fetch failed'); }
+      // Normalize to WEBVTT (SRT uses comma decimals) and add the HLS timestamp
+      // map so AVPlayer aligns cues to the video timeline instead of drifting.
+      const TSMAP = 'X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000';
       if (!/^﻿?WEBVTT/.test(body)) {
-        body = 'WEBVTT\n\n' + body.replace(/\r/g, '').replace(/(\d\d:\d\d:\d\d),(\d{3})/g, '$1.$2');
+        body = body.replace(/\r/g, '').replace(/(\d\d:\d\d:\d\d),(\d{3})/g, '$1.$2');
+        body = `WEBVTT\n${TSMAP}\n\n` + body;
+      } else if (!/X-TIMESTAMP-MAP/.test(body)) {
+        body = body.replace(/^(﻿?WEBVTT[^\n]*\n)/, `$1${TSMAP}\n`);
       }
       res.writeHead(200, { 'content-type': 'text/vtt; charset=utf-8' });
       return res.end(body);
