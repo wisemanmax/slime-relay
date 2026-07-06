@@ -29,14 +29,22 @@ export default {
       let body;
       try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
       if (!body || !body.id) return json({ error: 'id required' }, 400);
+      // Defensive bounds: cap string lengths so a buggy/compromised (but
+      // token-holding) registrant can't bloat KV, and only keep an `address`
+      // the app should ever connect to — a real http(s) URL, nothing else.
+      const cap = (v, n) => String(v ?? '').slice(0, n);
+      const safeAddress = (v) => {
+        const s = String(v || '');
+        return /^https?:\/\//i.test(s) ? s.slice(0, 200) : '';
+      };
       const record = {
-        id: String(body.id),
-        name: String(body.name || body.id),
-        os: String(body.os || 'unknown'),
-        address: String(body.address || ''),
-        load: Number(body.load) || 0,
-        capacity: Number(body.capacity) || 0,
-        version: body.version || 1,
+        id: cap(body.id, 128),
+        name: cap(body.name || body.id, 80),
+        os: cap(body.os || 'unknown', 80),
+        address: safeAddress(body.address),
+        load: Math.max(0, Number(body.load) || 0),
+        capacity: Math.max(0, Number(body.capacity) || 0),
+        version: Number(body.version) || 1,
         lastSeen: Date.now(),
       };
       await env.SERVERS.put(`srv:${record.id}`, JSON.stringify(record), { expirationTtl: HEARTBEAT_TTL });
