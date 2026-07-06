@@ -1,0 +1,8 @@
+name = "slime-web"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+# Secrets (set with `wrangler secret put <NAME>`), never committed:
+#   SITE_PASSWORD    the password you'll type to get in
+#   SESSION_SECRET   any long random string (openssl rand -hex 32) — signs the cookie
+#   TMDB_TOKEN       your TMDB v4 read token (Bearer) so the key stays server-side

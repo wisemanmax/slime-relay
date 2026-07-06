@@ -1,0 +1,13 @@
+{
+  "name": "slime-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SlimeWatch — private web app (Cloudflare Worker): TMDB catalog + provider-embed playback behind a password.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
