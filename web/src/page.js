@@ -223,6 +223,10 @@ async function viewHome(){ const main=document.getElementById('main'); main.inne
     api('discover/tv?with_keywords=210024&sort_by=popularity.desc'),
     api('discover/movie?with_genres=28&sort_by=popularity.desc'),
   ]);
+  if(!trend && !pm && !pt){
+    main.innerHTML='<div class="empty">Couldn\\'t load the catalog.<br><br>The site\\'s <b>TMDB_TOKEN</b> secret is likely unset or wrong. Re-set it and reload.</div>';
+    return;
+  }
   const trItems=(trend?.results||[]).filter(x=>x.media_type!=='person');
   let out = renderHero(trItems);
   const cont=load('sw_continue',[]).map(c=>({id:c.id,media_type:c.kind,title:c.title,poster_path:c.poster,backdrop_path:c.backdrop}));
