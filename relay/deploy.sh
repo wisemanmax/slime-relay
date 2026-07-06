@@ -1,15 +1,30 @@
 #!/usr/bin/env bash
 # One-shot relay deploy: installs wrangler, logs you into Cloudflare, creates the
-# KV store, wires it into wrangler.toml, sets the secret, and deploys.
-# Usage:  ./deploy.sh [TOKEN]
+# KV store, wires it into wrangler.toml, sets both role tokens, and deploys.
+#
+# Two roles:
+#   USER_TOKEN  = the fleet token — SAME value as your app's SLIME_TOKEN and each
+#                 server's SLIME_TOKEN. Everyone streaming has it (it's baked into
+#                 the apps). Grants routing (/route) + heartbeat registration.
+#   ADMIN_TOKEN = a private admin token — only YOU. Unlocks the dashboard, the full
+#                 fleet (names/addresses/load), and routing controls. Auto-generated
+#                 if you don't pass one.
+#
+# Usage:  ./deploy.sh [USER_TOKEN] [ADMIN_TOKEN]
 set -euo pipefail
 cd "$(dirname "$0")"
 
-TOKEN="${1:-}"
-if [ -z "$TOKEN" ]; then
-  read -rp "Shared token (RELAY_TOKEN — same value as your app's SLIME_TOKEN): " TOKEN
+USER_TOKEN="${1:-}"
+ADMIN_TOKEN="${2:-}"
+if [ -z "$USER_TOKEN" ]; then
+  read -rp "Fleet token (USER_TOKEN — same value as your app's SLIME_TOKEN): " USER_TOKEN
 fi
-[ -z "$TOKEN" ] && { echo "A token is required."; exit 1; }
+[ -z "$USER_TOKEN" ] && { echo "A fleet token is required."; exit 1; }
+if [ -z "$ADMIN_TOKEN" ]; then
+  ADMIN_TOKEN="$(openssl rand -hex 20)"
+  echo "→ Generated a new ADMIN_TOKEN (save this — it's your dashboard/admin key):"
+  echo "      $ADMIN_TOKEN"
+fi
 
 echo "→ Installing wrangler…"
 npm install --silent
@@ -28,14 +43,17 @@ else
   echo "→ KV already configured in wrangler.toml — skipping create."
 fi
 
-echo "→ Setting RELAY_TOKEN secret…"
-printf '%s' "$TOKEN" | npx wrangler secret put RELAY_TOKEN
+echo "→ Setting USER_TOKEN secret…"
+printf '%s' "$USER_TOKEN"  | npx wrangler secret put USER_TOKEN
+echo "→ Setting ADMIN_TOKEN secret…"
+printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
 
 echo "→ Deploying…"
 npx wrangler deploy
 
 echo
 echo "✅ Relay deployed."
-echo "   Dashboard:  <the workers.dev URL printed above>/?key=$TOKEN"
-echo "   Put that base URL (without ?key) into each server's RELAY_URL,"
+echo "   Admin dashboard:  <the workers.dev URL printed above>/?key=$ADMIN_TOKEN"
+echo "   Put the base URL (without ?key) into each server's RELAY_URL,"
 echo "   and into the Apple TV app under Settings → Relay."
+echo "   Enter the ADMIN_TOKEN under Settings → Admin to manage the fleet in-app."

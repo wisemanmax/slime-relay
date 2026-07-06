@@ -5,6 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "setup": "node setup.js",
+    "doctor": "node doctor.js",
     "postinstall": "playwright install chromium"
   },
   "engines": {

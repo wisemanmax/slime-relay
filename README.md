@@ -3,122 +3,110 @@
 A tiny fleet system for **SlimeWatch** stream servers. Run the extractor on as
 many machines as you like (macOS, Windows, or Linux); each one registers with a
 central **relay**, and a live **dashboard** shows every connected machine and its
-load. The SlimeWatch app then asks the relay which servers are up and streams
-through one of them.
+load. The SlimeWatch app asks the relay which servers are up and streams through
+the best one — spreading load across the whole fleet and failing over if one drops.
 
 ```
-  ┌─────────────┐  heartbeat   ┌──────────────────────┐   dashboard
-  │  extractor  │ ───────────▶ │      SlimeRelay      │ ◀───────────  you (browser)
+  ┌─────────────┐  heartbeat   ┌──────────────────────┐   dashboard + controls
+  │  extractor  │ ───────────▶ │      SlimeRelay      │ ◀───────────  you (admin)
   │  (Mac #1)   │              │ (Cloudflare Worker)  │
-  └─────────────┘              │   • /register        │   /servers
-  ┌─────────────┐  heartbeat   │   • /servers  /pick  │ ◀───────────  SlimeWatch app
-  │  extractor  │ ───────────▶ │   • dashboard  (/)   │               (Part 2)
+  └─────────────┘              │   • /register        │   /route (bare list)
+  ┌─────────────┐  heartbeat   │   • /route  /servers │ ◀───────────  SlimeWatch app
+  │  extractor  │ ───────────▶ │   • dashboard  (/)   │
   │ (Windows)   │              └──────────────────────┘
   └─────────────┘
 ```
 
-Repo layout:
-
 - **`server/`** — the extractor. Node + Playwright, cross-platform. Turns a title
-  into a playable stream and (optionally) heartbeats to the relay.
-- **`relay/`** — the Cloudflare Worker: registry API + dashboard. Always-on, free.
+  into a playable stream and heartbeats to the relay.
+- **`relay/`** — the Cloudflare Worker: registry, routing, and dashboard. Always-on, free.
+
+---
+
+## Two tokens (roles)
+
+| Token | Who has it | What it unlocks |
+|---|---|---|
+| **`USER_TOKEN`** (the *fleet* token) | every server + the app (baked in) | streaming + routing (`/route`), heartbeat registration |
+| **`ADMIN_TOKEN`** | just you | the dashboard, the full fleet (names/addresses/load), and routing controls (disable / prefer a server) |
+
+Regular users are routed to a server automatically but never see the fleet.
+The **fleet token is the same value** as each server's `SLIME_TOKEN` — pick it once
+and reuse it everywhere. Generate tokens with `openssl rand -hex 20`.
 
 ---
 
 ## 1. Run a server (macOS / Windows / Linux)
 
-**Prerequisites:** [Node.js 18+](https://nodejs.org).
+**Prerequisite:** [Node.js 18+](https://nodejs.org).
 
 ```bash
 cd server
-npm install                 # also downloads the Chromium Playwright needs
-cp .env.example .env         # then edit .env (see below)
+npm install          # also downloads the Chromium that Playwright needs
+npm run setup        # guided: asks for your token + relay URL, writes .env
+npm run doctor       # verifies Node, Chromium, token, relay, and your address
+npm start            # or ./start.sh   (Windows: double-click start.bat)
 ```
 
-Edit `.env`:
-
-| Key              | What it is                                                                 |
-|------------------|---------------------------------------------------------------------------|
-| `SLIME_TOKEN`    | Shared secret. **Must match** the relay's `RELAY_TOKEN` and the app token. |
-| `PORT`           | Port to listen on (default `8787`).                                        |
-| `RELAY_URL`      | Your deployed relay, e.g. `https://slime-relay.you.workers.dev`. Blank = standalone. |
-| `PUBLIC_ADDRESS` | How the Apple TV/app reaches this box (`http://LAN-or-mesh-IP:8787`). Blank = auto-detect LAN IPv4. |
-| `SERVER_NAME`    | Friendly name on the dashboard (default: hostname).                        |
-
-Start it:
-
-- **macOS / Linux:** `./start.sh`  (or `npm start`)
-- **Windows:** double-click **`start.bat`**, or `./start.ps1` in PowerShell
-
-You should see `SlimeWatch extractor on http://0.0.0.0:8787` and, if `RELAY_URL`
-is set, `[heartbeat] … -> <relay> every 30s`. The machine now appears on the
-dashboard.
+That's the whole thing. `setup` writes `.env` for you; `doctor` tells you — in
+plain English with the exact fix — if anything's off *before* you start. You
+should then see `SlimeWatch extractor on http://0.0.0.0:8787` and, if a relay is
+configured, `[heartbeat] … -> <relay>` — and the machine appears on the dashboard.
 
 > **Reaching servers across networks:** the Apple TV must be able to reach each
-> server's `PUBLIC_ADDRESS`. On one LAN that's the plain `10.0.0.x` address. To
-> use machines on different networks, put them all on the same overlay
-> (NordVPN Meshnet, Tailscale, etc.) and set `PUBLIC_ADDRESS` to the mesh IP.
+> server's advertised address. On one home network that's automatic. Across
+> networks, put every machine on the same overlay (NordVPN Meshnet, Tailscale)
+> and, if `doctor` flags it, pin `PUBLIC_ADDRESS` to the mesh IP. No port-forwarding.
 
 ---
 
 ## 2. Deploy the relay (once)
 
-The relay is a Cloudflare Worker — free tier, always-on, reachable everywhere.
+The relay is a free, always-on Cloudflare Worker. You need a (free) Cloudflare account.
 
 ```bash
 cd relay
-npm install
-npx wrangler login                         # opens the browser once
-
-# create the KV store and paste the printed id into wrangler.toml (SERVERS binding)
-npx wrangler kv namespace create SERVERS
-
-# set the shared secret (same value as SLIME_TOKEN on your servers)
-npx wrangler secret put RELAY_TOKEN
-
-npm run deploy
+./deploy.sh <FLEET_TOKEN>        # Windows: ./deploy.ps1 <FLEET_TOKEN>
 ```
 
-Wrangler prints your URL, e.g. `https://slime-relay.<your-subdomain>.workers.dev`.
+One command: it installs wrangler, opens the browser to log in, creates the KV
+store, sets **both** tokens (your `<FLEET_TOKEN>` as `USER_TOKEN`, plus a freshly
+generated `ADMIN_TOKEN` it prints — **save it**), and deploys. It ends by printing
+your dashboard URL.
 
-- **Dashboard:** open `https://…workers.dev/?key=YOUR_RELAY_TOKEN`
-- **Server list (JSON):** `GET /servers?key=…`
-- **Least-loaded pick:** `GET /pick?key=…`
+- **Admin dashboard:** `https://…workers.dev/?key=<ADMIN_TOKEN>` — see every server,
+  and **Disable / Enable / Prefer** any of them. Changes apply to every device at once.
+- Put the base URL (no `?key`) into each server's `RELAY_URL` and into the app.
 
-Put that URL into each server's `RELAY_URL`, restart them, and watch them show up.
+Prefer to do it by hand? See **[INSTRUCTIONS.md](INSTRUCTIONS.md)**.
 
 ---
 
-## 3. Throttling / capacity
+## 3. Point the app at it
 
-Each server advertises `capacity` (its `SESSION_CAP`, default 80) and reports
-current `load`. The dashboard draws a load bar per machine, and `/pick` returns
-the least-loaded live server — so as you add machines, work spreads out and busy
-boxes are skipped. Lower a machine's ceiling by editing `SESSION_CAP` in
+On the Apple TV: **SlimeWatch → Settings → Relay** → paste your relay URL. The app
+streams through whichever server is reachable + least busy, and fails over
+automatically. Leave **Settings → Admin** blank to stream as a normal user; enter
+your `ADMIN_TOKEN` there to see and control the fleet from the app too.
+
+---
+
+## Capacity
+
+Each server advertises `capacity` (its `SESSION_CAP`, default 80) and reports live
+`load`. Routing sends new sessions to the least-loaded enabled server, so work
+spreads out as you add machines. Lower a box's ceiling via `SESSION_CAP` in
 `server/server.js`.
-
----
 
 ## Security
 
-- The token gates **every** relay route and the extractor itself — keep it secret.
-- `.env` is gitignored; never commit real tokens.
-- This repo is **private**; share by adding collaborators.
-- Reachability is provided by your LAN / mesh VPN, not by port-forwarding.
-
-## Point the Apple TV app at it
-
-On the Apple TV: **SlimeWatch → Settings → Relay** → paste your relay URL →
-**Discover servers**. The app then streams through whichever server is
-**reachable and least busy** and fails over automatically if one drops. The
-single-host field is only used when no relay is set. (Make sure your token
-matches the one baked into the app.)
-
-See **[INSTRUCTIONS.md](INSTRUCTIONS.md)** for the full copy-paste walkthrough
-and troubleshooting.
+- The fleet token gates the relay and the extractor; the admin token gates control.
+  Keep both secret. The extractor **refuses to start** without a token (no open proxy).
+- `.env` and `.dev.vars` are gitignored — never commit real tokens.
+- Reachability comes from your LAN / mesh VPN, not from port-forwarding.
 
 ## Status
 
-- ✅ Cross-platform extractor with relay heartbeat (macOS / Windows / Linux)
-- ✅ Cloudflare relay + live dashboard
-- ✅ **App auto-routes to the best server** (reachable + lowest load, with failover)
+- ✅ Cross-platform extractor with guided setup + `doctor` self-check
+- ✅ Cloudflare relay + live dashboard with admin routing controls
+- ✅ App auto-routes across the whole fleet (reachable + least-loaded, with failover)

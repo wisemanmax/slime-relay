@@ -7,6 +7,24 @@ const http = require('http');
 const https = require('https');
 const { chromium } = require('playwright');
 
+// ── Foolproof startup ── load .env no matter how we were launched (npm start,
+// bare `node server.js`, or a double-click), then fail loud & clear on the
+// mistakes that otherwise cause silent breakage.
+require('./env').loadEnv();
+(function preflight() {
+  const t = (process.env.SLIME_TOKEN || '').trim();
+  if (!t || t === 'change-me') {
+    console.error(
+      '\n✖  SLIME_TOKEN is not set.\n' +
+      '   The extractor refuses to start without it — otherwise it would be an open\n' +
+      '   proxy on your network, and the relay rejects its heartbeats.\n\n' +
+      '   Fix:  run  " node setup.js "  (guided), or set SLIME_TOKEN in server/.env\n' +
+      '         to the SAME value as your relay USER_TOKEN and the SlimeWatch app token.\n'
+    );
+    process.exit(1);
+  }
+})();
+
 const PORT = process.env.PORT || 8787;
 // Shared secret — when set, every request (except /health) must carry ?key=…
 // so other devices on the LAN can't use this as an open proxy.
@@ -46,16 +64,25 @@ async function ensureBrowser() {
   // the old handle is stale — relaunch instead of failing every request.
   if (browser && browser.isConnected() && ctx) return;
   try { if (browser) await browser.close(); } catch (e) {}
-  browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--autoplay-policy=no-user-gesture-required',
-      // Modern embed players (VidFast, VidSrc.cc, P-Stream, Videasy) fingerprint
-      // for automation and refuse to mint the stream token if they detect it.
-      '--disable-blink-features=AutomationControlled',
-      '--no-sandbox',
-    ],
-  });
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--autoplay-policy=no-user-gesture-required',
+        // Modern embed players (VidFast, VidSrc.cc, P-Stream, Videasy) fingerprint
+        // for automation and refuse to mint the stream token if they detect it.
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+      ],
+    });
+  } catch (e) {
+    if (/Executable doesn't exist|playwright install|browserType.launch/i.test(e.message || '')) {
+      console.error('\n✖  Chromium for Playwright is missing or failed to launch.\n' +
+        '   Fix:  run  " npx playwright install chromium "  inside the server/ folder,\n' +
+        '         then start again.  (Run  node doctor.js  to double-check everything.)\n');
+    }
+    throw e;
+  }
   browser.on('disconnected', () => { browser = null; ctx = null; });
   ctx = await browser.newContext({
     userAgent: UA,
