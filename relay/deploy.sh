@@ -3,10 +3,10 @@
 # KV store, wires it into wrangler.toml, sets both role tokens, and deploys.
 #
 # Two roles:
-#   USER_TOKEN  = the fleet token — SAME value as your app's SLIME_TOKEN and each
+#   USER_TOKEN  = the fleet token - SAME value as your app's SLIME_TOKEN and each
 #                 server's SLIME_TOKEN. Everyone streaming has it (it's baked into
 #                 the apps). Grants routing (/route) + heartbeat registration.
-#   ADMIN_TOKEN = a private admin token — only YOU. Unlocks the dashboard, the full
+#   ADMIN_TOKEN = a private admin token - only YOU. Unlocks the dashboard, the full
 #                 fleet (names/addresses/load), and routing controls. Auto-generated
 #                 if you don't pass one.
 #
@@ -17,43 +17,43 @@ cd "$(dirname "$0")"
 USER_TOKEN="${1:-}"
 ADMIN_TOKEN="${2:-}"
 if [ -z "$USER_TOKEN" ]; then
-  read -rp "Fleet token (USER_TOKEN — same value as your app's SLIME_TOKEN): " USER_TOKEN
+  read -rp "Fleet token (USER_TOKEN - same value as your app's SLIME_TOKEN): " USER_TOKEN
 fi
 [ -z "$USER_TOKEN" ] && { echo "A fleet token is required."; exit 1; }
 if [ -z "$ADMIN_TOKEN" ]; then
   ADMIN_TOKEN="$(openssl rand -hex 20)"
-  echo "→ Generated a new ADMIN_TOKEN (save this — it's your dashboard/admin key):"
+  echo "-> Generated a new ADMIN_TOKEN (save this - it's your dashboard/admin key):"
   echo "      $ADMIN_TOKEN"
 fi
 
-echo "→ Installing wrangler…"
+echo "-> Installing wrangler..."
 npm install --silent
 
-echo "→ Logging in to Cloudflare (a browser window will open — click Allow)…"
+echo "-> Logging in to Cloudflare (a browser window will open - click Allow)..."
 npx wrangler login
 
 if grep -q "PASTE_KV_NAMESPACE_ID_HERE" wrangler.toml; then
-  echo "→ Creating KV namespace SERVERS…"
+  echo "-> Creating KV namespace SERVERS..."
   OUT="$(npx wrangler kv namespace create SERVERS 2>&1 | tee /dev/tty)"
   ID="$(printf '%s' "$OUT" | grep -oiE '[0-9a-f]{32}' | head -1)"
-  [ -z "$ID" ] && { echo "Couldn't read the KV id — paste it into wrangler.toml manually, then rerun."; exit 1; }
+  [ -z "$ID" ] && { echo "Couldn't read the KV id - paste it into wrangler.toml manually, then rerun."; exit 1; }
   sed -i.bak "s/PASTE_KV_NAMESPACE_ID_HERE/$ID/" wrangler.toml && rm -f wrangler.toml.bak
-  echo "→ KV id wired into wrangler.toml: $ID"
+  echo "-> KV id wired into wrangler.toml: $ID"
 else
-  echo "→ KV already configured in wrangler.toml — skipping create."
+  echo "-> KV already configured in wrangler.toml - skipping create."
 fi
 
-echo "→ Setting USER_TOKEN secret…"
+echo "-> Setting USER_TOKEN secret..."
 printf '%s' "$USER_TOKEN"  | npx wrangler secret put USER_TOKEN
-echo "→ Setting ADMIN_TOKEN secret…"
+echo "-> Setting ADMIN_TOKEN secret..."
 printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
 
-echo "→ Deploying…"
+echo "-> Deploying..."
 npx wrangler deploy
 
 echo
-echo "✅ Relay deployed."
+echo "[OK] Relay deployed."
 echo "   Admin dashboard:  <the workers.dev URL printed above>/?key=$ADMIN_TOKEN"
 echo "   Put the base URL (without ?key) into each server's RELAY_URL,"
-echo "   and into the Apple TV app under Settings → Relay."
-echo "   Enter the ADMIN_TOKEN under Settings → Admin to manage the fleet in-app."
+echo "   and into the Apple TV app under Settings -> Relay."
+echo "   Enter the ADMIN_TOKEN under Settings -> Admin to manage the fleet in-app."

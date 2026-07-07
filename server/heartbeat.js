@@ -12,7 +12,7 @@ const INTERVAL_MS = 30_000;
 
 function start({ getLoad, capacity, port }) {
   if (!RELAY_URL) {
-    console.log('[heartbeat] RELAY_URL not set — running standalone (no relay registration).');
+    console.log('[heartbeat] RELAY_URL not set - running standalone (no relay registration).');
     console.log('            To join the fleet, set RELAY_URL in .env (or run  node setup.js ).');
     return;
   }
@@ -21,13 +21,13 @@ function start({ getLoad, capacity, port }) {
   if (!address) {
     const candidates = ipv4Candidates(port);
     address = candidates.length ? candidates[0].url : '';
-    // Several reachable-looking IPs → auto-pick is a guess. Tell the user how to
+    // Several reachable-looking IPs -> auto-pick is a guess. Tell the user how to
     // lock it down so the Apple TV isn't handed a dead (e.g. virtual-adapter) IP.
     if (candidates.length > 1) {
-      console.log('[heartbeat] Multiple network addresses found — auto-picked the most likely one.');
+      console.log('[heartbeat] Multiple network addresses found - auto-picked the most likely one.');
       console.log('            If the app can\'t reach this server, set PUBLIC_ADDRESS in .env to one of:');
       for (const c of candidates) {
-        console.log(`              ${c.url}   (${c.iface}, ${c.kind}${c.virtual ? ', virtual — usually NOT reachable' : ''})`);
+        console.log(`              ${c.url}   (${c.iface}, ${c.kind}${c.virtual ? ', virtual - usually NOT reachable' : ''})`);
       }
     }
   }

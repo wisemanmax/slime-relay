@@ -5,3 +5,4 @@ node_modules/
 .wrangler/
 .DS_Store
 package-lock.json
+anime-list-full.json

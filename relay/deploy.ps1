@@ -4,13 +4,13 @@
 param([string]$UserToken, [string]$AdminToken)
 Set-Location $PSScriptRoot
 
-if (-not $UserToken) { $UserToken = Read-Host "Fleet token (USER_TOKEN — same as your app's SLIME_TOKEN)" }
+if (-not $UserToken) { $UserToken = Read-Host "Fleet token (USER_TOKEN - same as your app's SLIME_TOKEN)" }
 if (-not $UserToken) { Write-Error "A fleet token is required."; exit 1 }
 if (-not $AdminToken) {
   $bytes = New-Object 'System.Byte[]' 20
   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
   $AdminToken = -join ($bytes | ForEach-Object { $_.ToString('x2') })
-  Write-Host "-> Generated a new ADMIN_TOKEN (save this — it's your dashboard/admin key):"
+  Write-Host "-> Generated a new ADMIN_TOKEN (save this - it's your dashboard/admin key):"
   Write-Host "      $AdminToken"
 }
 
@@ -24,7 +24,7 @@ if (Select-String -Path wrangler.toml -Pattern "PASTE_KV_NAMESPACE_ID_HERE" -Qui
   Write-Host "-> Creating KV namespace SERVERS..."
   $out = npx wrangler kv namespace create SERVERS 2>&1 | Tee-Object -Variable dummy | Out-String
   $id = [regex]::Match($out, '[0-9a-fA-F]{32}').Value
-  if (-not $id) { Write-Error "Couldn't read the KV id — paste it into wrangler.toml manually."; exit 1 }
+  if (-not $id) { Write-Error "Couldn't read the KV id - paste it into wrangler.toml manually."; exit 1 }
   (Get-Content wrangler.toml) -replace 'PASTE_KV_NAMESPACE_ID_HERE', $id | Set-Content wrangler.toml
   Write-Host "-> KV id wired in: $id"
 }

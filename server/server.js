@@ -1,13 +1,13 @@
 // SlimeWatch local extractor + proxy server (runs on your Mac).
 // Extracts the real stream from a provider embed using headless Chromium,
 // then PROXIES the bytes (the CDNs TLS-fingerprint-block non-browser clients,
-// so AVPlayer can't fetch directly — we fetch via the browser's network stack
+// so AVPlayer can't fetch directly - we fetch via the browser's network stack
 // and re-serve over your LAN).
 const http = require('http');
 const https = require('https');
 const { chromium } = require('playwright');
 
-// ── Foolproof startup ── load .env no matter how we were launched (npm start,
+// -- Foolproof startup -- load .env no matter how we were launched (npm start,
 // bare `node server.js`, or a double-click), then fail loud & clear on the
 // mistakes that otherwise cause silent breakage.
 require('./env').loadEnv();
@@ -15,8 +15,8 @@ require('./env').loadEnv();
   const t = (process.env.SLIME_TOKEN || '').trim();
   if (!t || t === 'change-me') {
     console.error(
-      '\n✖  SLIME_TOKEN is not set.\n' +
-      '   The extractor refuses to start without it — otherwise it would be an open\n' +
+      '\n[X]  SLIME_TOKEN is not set.\n' +
+      '   The extractor refuses to start without it - otherwise it would be an open\n' +
       '   proxy on your network, and the relay rejects its heartbeats.\n\n' +
       '   Fix:  run  " node setup.js "  (guided), or set SLIME_TOKEN in server/.env\n' +
       '         to the SAME value as your relay USER_TOKEN and the SlimeWatch app token.\n'
@@ -26,7 +26,7 @@ require('./env').loadEnv();
 })();
 
 const PORT = process.env.PORT || 8787;
-// Shared secret — when set, every request (except /health) must carry ?key=…
+// Shared secret - when set, every request (except /health) must carry ?key=...
 // so other devices on the LAN can't use this as an open proxy.
 const TOKEN = process.env.SLIME_TOKEN || '';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -46,7 +46,7 @@ function touchSession(id) {
   return s;
 }
 
-/// Evict the least-recently-used session when over the cap — never the one a
+/// Evict the least-recently-used session when over the cap - never the one a
 /// long movie is still streaming (the old id-arithmetic eviction could drop a
 /// live session and 404 mid-playback).
 function evictIfNeeded() {
@@ -61,7 +61,7 @@ function evictIfNeeded() {
 
 async function ensureBrowser() {
   // Self-heal: if the browser crashed or was closed (e.g. after a long idle),
-  // the old handle is stale — relaunch instead of failing every request.
+  // the old handle is stale - relaunch instead of failing every request.
   if (browser && browser.isConnected() && ctx) return;
   try { if (browser) await browser.close(); } catch (e) {}
   try {
@@ -77,7 +77,7 @@ async function ensureBrowser() {
     });
   } catch (e) {
     if (/Executable doesn't exist|playwright install|browserType.launch/i.test(e.message || '')) {
-      console.error('\n✖  Chromium for Playwright is missing or failed to launch.\n' +
+      console.error('\n[X]  Chromium for Playwright is missing or failed to launch.\n' +
         '   Fix:  run  " npx playwright install chromium "  inside the server/ folder,\n' +
         '         then start again.  (Run  node doctor.js  to double-check everything.)\n');
     }
@@ -98,8 +98,8 @@ async function ensureBrowser() {
   });
 }
 
-// Load the embed and capture the stream URL. Prefers HLS (.m3u8) — it carries
-// subtitle/quality renditions AVPlayer understands — but accepts a direct MP4
+// Load the embed and capture the stream URL. Prefers HLS (.m3u8) - it carries
+// subtitle/quality renditions AVPlayer understands - but accepts a direct MP4
 // if no playlist shows up quickly, so mp4-only providers stay fast.
 async function extract(embedUrl) {
   await ensureBrowser();
@@ -112,7 +112,8 @@ async function extract(embedUrl) {
     if (!m3u8 && /\.m3u8([/?&#]|$)/i.test(u)) m3u8 = u;
     if (!mp4 && /\.mp4([/?&#]|$)/i.test(u)) mp4 = u;
     if ((/\.vtt([/?&#]|$)/i.test(u) || /\.srt([/?&#]|$)/i.test(u)) && !captured.some(s => s.url === u)) {
-      captured.push({ lang: 'und', name: 'Subtitles', url: u });
+      const lang = subLangFromUrl(u);
+      captured.push({ lang, name: subName(lang), url: u });
     }
   };
   page.on('response', (r) => seen(r.url()));
@@ -191,6 +192,27 @@ function nodeGetJSON(u, timeoutMs = 55000) {
 // any title by TMDB id. Set SLIME_SUBS_KEY in the server env to enable.
 const SUBS_KEY = process.env.SLIME_SUBS_KEY || '';
 
+// Best-effort subtitle language from a file URL - providers rarely label the
+// tracks their player loads, so without this they all show as "und"/"Subtitles"
+// and the viewer can't tell the anime's native sub from an English one.
+const LANG_NAMES = { en: 'English', ja: 'Japanese', es: 'Spanish', fr: 'French',
+  pt: 'Portuguese', de: 'German', it: 'Italian', ar: 'Arabic', zh: 'Chinese',
+  ko: 'Korean', ru: 'Russian', hi: 'Hindi', id: 'Indonesian' };
+const LANG_NORM = { english: 'en', eng: 'en', japanese: 'ja', jpn: 'ja', jp: 'ja',
+  spanish: 'es', spa: 'es', french: 'fr', fra: 'fr', fre: 'fr', portuguese: 'pt',
+  por: 'pt', german: 'de', ger: 'de', italian: 'it', ita: 'it', arabic: 'ar', ara: 'ar',
+  chinese: 'zh', chi: 'zh', korean: 'ko', kor: 'ko', russian: 'ru', rus: 'ru',
+  hindi: 'hi', hin: 'hi', indonesian: 'id', ind: 'id' };
+function subLangFromUrl(u) {
+  const s = decodeURIComponent(String(u || '')).toLowerCase();
+  const m = s.match(/(?:[\/._\-=]|lang=|language=)(english|eng|en|japanese|jpn|jp|ja|spanish|spa|es|french|fra|fre|fr|portuguese|por|pt|german|ger|de|italian|ita|it|arabic|ara|ar|chinese|chi|zh|korean|kor|ko|russian|rus|ru|hindi|hin|hi|indonesian|ind|id)(?=[\/._\-&?]|\.vtt|\.srt|$)/);
+  if (!m) return 'und';
+  return LANG_NORM[m[1]] || m[1];
+}
+function subName(lang) {
+  return LANG_NAMES[lang] || (lang && lang !== 'und' ? lang.toUpperCase() : 'Subtitles');
+}
+
 // External subtitles by TMDB id (independent of the video provider). The Wyzie
 // index (sub.wyzie.io) is free and needs no key, so subtitles are ON by default;
 // a SLIME_SUBS_KEY is passed through only if one happens to be set.
@@ -218,7 +240,7 @@ async function fetchSubtitles(params) {
   return out;
 }
 
-// ── Strategy #2: direct JSON resolver (no headless browser) ─────────────────
+// -- Strategy #2: direct JSON resolver (no headless browser) -----------------
 // Points at a self-hosted resolver that takes a TMDB id and returns a stream
 // URL (e.g. Inside4ndroid/TMDB-Embed-API or DivineChile/vidsrc-scraper).
 // Set DIRECT_RESOLVER in the env to enable, e.g. "http://127.0.0.1:8181".
@@ -260,7 +282,11 @@ async function resolveDirect(tmdb, kind, season, episode) {
       const r = j.results[k];
       if (r && r.hls_url) {
         streamUrl = r.hls_url;
-        subs = (r.subtitles || []).map((s, i) => ({ lang: 'und', name: `Subtitles ${i + 1}`, url: s }));
+        subs = (r.subtitles || []).map((s) => {
+          const url = typeof s === 'string' ? s : (s.url || s.file);
+          const lang = (s.language || s.lang || subLangFromUrl(url)).toString().slice(0, 8);
+          return { lang, name: s.label || subName(lang), url };
+        }).filter(s => typeof s.url === 'string');
         break;
       }
     }
@@ -271,9 +297,9 @@ async function resolveDirect(tmdb, kind, season, episode) {
   return { stream: streamUrl, referer, type: isHls ? 'hls' : 'mp4', subs };
 }
 
-// ── Strategy #3: Internet Archive (legal, DRM-free public-domain films) ──────
+// -- Strategy #3: Internet Archive (legal, DRM-free public-domain films) ------
 // Given a title (+ year), find a matching movies item and its best MP4. This
-// is a real last resort — mostly classics/public-domain — but it's fully legal
+// is a real last resort - mostly classics/public-domain - but it's fully legal
 // and its files play in AVPlayer directly (range-friendly, no TLS block).
 async function resolveArchive(title, year) {
   if (!title) return null;
@@ -322,7 +348,7 @@ async function resolveArchive(title, year) {
 }
 
 // Stream media bytes straight from the CDN (it authorizes by signed URL, not
-// TLS fingerprint — only the provider embed needs the browser). Forwards the
+// TLS fingerprint - only the provider embed needs the browser). Forwards the
 // client's Range verbatim and pipes the response, so AVPlayer gets exactly the
 // bytes it asks for (the old 6MB cap broke progressive-MP4 playback). Resolves
 // false WITHOUT writing headers if the CDN blocks us (403/401), so the caller
@@ -342,18 +368,18 @@ function streamProxy(streamUrl, referer, req, res, defaultType = 'video/mp4', de
         const next = new URL(up.headers.location, streamUrl).href;
         return streamProxy(next, referer, req, res, defaultType, depth + 1, patch).then(done);
       }
-      // Blocked → let the caller fall back to the browser proxy (no headers written).
+      // Blocked -> let the caller fall back to the browser proxy (no headers written).
       if (up.statusCode === 403 || up.statusCode === 401) { up.resume(); return done(false); }
       const h = { 'accept-ranges': 'bytes' };
       for (const k of ['content-type', 'content-length', 'content-range']) {
         if (up.headers[k]) h[k] = up.headers[k];
       }
       if (!h['content-type']) h['content-type'] = defaultType;
-      console.log(`   → CDN ${up.statusCode}  ${h['content-range'] || h['content-length'] || ''}`);
+      console.log(`   -> CDN ${up.statusCode}  ${h['content-range'] || h['content-length'] || ''}`);
       res.writeHead(up.statusCode, h);
       if (patch && patch.length) {
-        // Rewrite hev1→hvc1 fourccs in flight: bytes +1 ('e'→'v') and
-        // +2 ('v'→'c'). Map chunk bytes to absolute file offsets via the
+        // Rewrite hev1->hvc1 fourccs in flight: bytes +1 ('e'->'v') and
+        // +2 ('v'->'c'). Map chunk bytes to absolute file offsets via the
         // range start so seeks stay correct.
         const cr = /bytes (\d+)-/.exec(up.headers['content-range'] || '');
         let pos = cr ? parseInt(cr[1], 10) : 0;
@@ -375,7 +401,7 @@ function streamProxy(streamUrl, referer, req, res, defaultType = 'video/mp4', de
       up.on('error', () => { try { res.end(); } catch (e) {} done(true); });
     });
     upstream.on('error', (e) => { console.log('   stream upstream err:', e.message); done(false); });
-    // AVPlayer opens/aborts many range connections as it seeks — abort the
+    // AVPlayer opens/aborts many range connections as it seeks - abort the
     // upstream fetch when the client hangs up so we don't keep downloading.
     req.on('close', () => upstream.destroy());
   });
@@ -396,7 +422,7 @@ async function browserProxyRange(s, req, res) {
   if (r.headers['content-range']) h['content-range'] = r.headers['content-range'];
   if (r.headers['content-length']) h['content-length'] = r.headers['content-length'];
   res.writeHead(r.status === 200 ? 206 : r.status, h);
-  // Same hev1→hvc1 rename as the direct path (black-video fix).
+  // Same hev1->hvc1 rename as the direct path (black-video fix).
   if (s.hevcPatch && s.hevcPatch.length && r.body && r.body.length) {
     for (const off of s.hevcPatch) {
       for (const [d, b] of [[1, 0x76], [2, 0x63]]) {
@@ -419,10 +445,10 @@ async function proxyFetch(url, referer, range) {
 }
 
 // AVPlayer plays 'hev1'-flavored HEVC as audio-only (black screen, working
-// sound) — Apple's decoder requires the 'hvc1' sample-entry flavor. The two
+// sound) - Apple's decoder requires the 'hvc1' sample-entry flavor. The two
 // are byte-compatible whenever the parameter sets live in the hvcC box (true
 // for these CDNs), so find the fourcc(s) inside the moov once per session and
-// rename them on the fly while streaming. Same byte count → ranges/seeking
+// rename them on the fly while streaming. Same byte count -> ranges/seeking
 // keep working.
 async function ensureHevcPatch(s) {
   if (s.hevcPatch !== undefined) return;
@@ -448,7 +474,7 @@ async function ensureHevcPatch(s) {
       }
       off += size;
     }
-    // moov at the end of the file → search the tail instead.
+    // moov at the end of the file -> search the tail instead.
     if (!moov && total > head.body.length) {
       const start = Math.max(0, total - 8388608);
       const tail = await proxyFetch(s.stream, s.referer, `bytes=${start}-${total - 1}`);
@@ -457,13 +483,13 @@ async function ensureHevcPatch(s) {
         if (at >= 4) { moovBase = start + at - 4; moov = tail.body.subarray(at - 4); }
       }
     }
-    if (!moov || !moov.includes('hvcC')) return; // no HEVC config — nothing to fix
+    if (!moov || !moov.includes('hvcC')) return; // no HEVC config - nothing to fix
     for (const tag of ['hev1', 'hev2']) {
       let i = 0;
       while ((i = moov.indexOf(tag, i)) !== -1) { s.hevcPatch.push(moovBase + i); i += 4; }
     }
     if (s.hevcPatch.length) {
-      console.log(`   hevc: renaming ${s.hevcPatch.length} hev1→hvc1 sample entr${s.hevcPatch.length === 1 ? 'y' : 'ies'} (black-video fix)`);
+      console.log(`   hevc: renaming ${s.hevcPatch.length} hev1->hvc1 sample entr${s.hevcPatch.length === 1 ? 'y' : 'ies'} (black-video fix)`);
     }
   } catch (e) {
     console.log('   hevc probe failed:', e.message);
@@ -494,8 +520,20 @@ const server = http.createServer(async (req, res) => {
     if (TOKEN && url.searchParams.get('key') !== TOKEN) {
       res.writeHead(401); return res.end('unauthorized');
     }
-    // Minimal logging — path + client only, no titles/URLs on disk.
+    // Minimal logging - path + client only, no titles/URLs on disk.
     console.log(`${new Date().toLocaleTimeString()}  ${req.method} ${url.pathname}  <- ${client}`);
+
+    // Anime id mapping: TMDB -> AniList/MAL + per-cour episode (for anime sources
+    // + dub/sub). Fast, no headless browser. Returns {} when the title isn't anime.
+    if (url.pathname === '/animeids') {
+      const p = url.searchParams;
+      let ids = null;
+      try {
+        ids = require('./animemap').animeIds(p.get('tmdb'), p.get('kind') || 'tv', p.get('season'), p.get('episode'));
+      } catch (e) {}
+      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      return res.end(JSON.stringify(ids || {}));
+    }
 
     // Resolve an embed URL to a local proxy URL.
     if (url.pathname === '/resolve') {
@@ -503,15 +541,15 @@ const server = http.createServer(async (req, res) => {
       const source = p.get('source') || 'embed';
       let info = null;
       if (source === 'ia') {
-        // Strategy #3 — Internet Archive (legal fallback).
+        // Strategy #3 - Internet Archive (legal fallback).
         info = await resolveArchive(p.get('title'), p.get('year'));
         console.log(`   resolve[ia]: ${info ? 'hit ' + info.archive : 'miss'} (${Date.now() - t0}ms)`);
       } else if (source === 'rest') {
-        // Strategy #2 — direct JSON resolver (no browser).
+        // Strategy #2 - direct JSON resolver (no browser).
         info = await resolveDirect(p.get('tmdb'), p.get('kind'), p.get('season'), p.get('episode'));
         console.log(`   resolve[rest]: ${info ? info.type : 'miss'} (${Date.now() - t0}ms)`);
       } else {
-        // Strategy #1 — headless-browser embed extraction (default).
+        // Strategy #1 - headless-browser embed extraction (default).
         const embed = p.get('embed');
         if (!embed) { res.writeHead(400); return res.end('missing embed'); }
         info = await extract(embed);
@@ -535,23 +573,23 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ id, type: info.type, play: playUrl }));
     }
 
-    // Progressive MP4 — stream the exact byte range AVPlayer asks for straight
+    // Progressive MP4 - stream the exact byte range AVPlayer asks for straight
     // from the CDN (falls back to the browser proxy only if the CDN blocks us).
     let m = url.pathname.match(/^\/mp4\/(\d+)$/);
     if (m) {
       const s = touchSession(m[1]);
       if (!s) { res.writeHead(404); return res.end('gone'); }
       console.log(`   mp4 range=${req.headers.range || '-'}  (streaming)`);
-      await ensureHevcPatch(s); // hev1→hvc1 rename offsets (black-video fix)
+      await ensureHevcPatch(s); // hev1->hvc1 rename offsets (black-video fix)
       const ok = await streamProxy(s.stream, s.referer, req, res, 'video/mp4', 0, s.hevcPatch);
       if (!ok && !res.headersSent) {
-        console.log('   mp4 stream blocked → browser-buffer fallback');
+        console.log('   mp4 stream blocked -> browser-buffer fallback');
         await browserProxyRange(s, req, res);
       }
       return;
     }
 
-    // HLS master/playlist proxy — rewrite segments back through us and, when we
+    // HLS master/playlist proxy - rewrite segments back through us and, when we
     // have external subtitles, inject a native subtitle rendition so AVPlayer
     // shows the subtitle picker.
     m = url.pathname.match(/^\/hls\/(\d+)\.m3u8$/);
@@ -601,29 +639,47 @@ const server = http.createServer(async (req, res) => {
         let vids = variants.filter(v => v.height > 0 || videoRe.test(v.inf));
         if (!vids.length) vids = variants;
 
-        // Rewrite passthrough header (proxy any rendition URIs; attach subs).
-        const keptHeader = header
-          .filter(l => { const t = l.trim(); return !t || t.startsWith('#'); })
-          .map(l => l.replace(/URI="([^"]+)"/g, (_, u) => `URI="${proxySeg(u)}"`));
+        // Fold the provider's OWN subtitle renditions into the same "subs" group
+        // the variants point at - otherwise they sit in the header declared but
+        // orphaned (the #1 reason subbed anime shows no captions: when Wyzie has
+        // nothing, the variant got no SUBTITLES tag and the native subs vanished).
+        // Everything else in the header (audio renditions, etc.) is proxied as-is.
+        const nativeSubLines = [], keptHeader = [];
+        for (const l of header) {
+          const t = l.trim();
+          if (/^#EXT-X-MEDIA:TYPE=SUBTITLES/i.test(t)) {
+            nativeSubLines.push(l
+              .replace(/GROUP-ID="[^"]*"/i, 'GROUP-ID="subs"')
+              .replace(/DEFAULT=(?:YES|NO)/i, 'DEFAULT=NO')
+              .replace(/URI="([^"]+)"/g, (_, u) => `URI="${proxySeg(u)}"`));
+          } else if (!t || t.startsWith('#')) {
+            keptHeader.push(l.replace(/URI="([^"]+)"/g, (_, u) => `URI="${proxySeg(u)}"`));
+          }
+        }
         if (!keptHeader.some(l => l.trim().startsWith('#EXTM3U'))) keptHeader.unshift('#EXTM3U');
+        if (!subLines.length && nativeSubLines.length) {
+          nativeSubLines[0] = nativeSubLines[0].replace(/DEFAULT=NO/i, 'DEFAULT=YES');
+        }
+        const allSubLines = [...subLines, ...nativeSubLines];
+        const subTag = allSubLines.length ? ',SUBTITLES="subs"' : '';
+        const tagVariant = inf => inf.replace(/\s*$/, '').replace(/,SUBTITLES="[^"]*"/i, '') + subTag;
 
         if (forceQuality && vids.length) {
           // Serve ONLY the ~1080p variant so AVPlayer can't downshift.
           const pick = pick1080(vids);
-          const inf = pick.inf.replace(/\s*$/, '') + (subs.length ? ',SUBTITLES="subs"' : '');
-          out = [...keptHeader, ...subLines, inf, proxySeg(pick.uri)].join('\n');
-          console.log(`   master: pinned ${pick.width || '?'}x${pick.height || '?'} (${Math.round((pick.bw || 0) / 1000)}k) of ${variants.length} variants`);
+          out = [...keptHeader, ...allSubLines, tagVariant(pick.inf), proxySeg(pick.uri)].join('\n');
+          console.log(`   master: pinned ${pick.width || '?'}x${pick.height || '?'} (${Math.round((pick.bw || 0) / 1000)}k) of ${variants.length} variants, ${allSubLines.length} sub track(s)`);
         } else {
           // Keep all video variants (adaptive), just proxied + subs attached.
           const body = [];
           for (const v of vids) {
-            body.push(v.inf.replace(/\s*$/, '') + (subs.length ? ',SUBTITLES="subs"' : ''));
+            body.push(tagVariant(v.inf));
             body.push(proxySeg(v.uri));
           }
-          out = [...keptHeader, ...subLines, ...body].join('\n');
+          out = [...keptHeader, ...allSubLines, ...body].join('\n');
         }
       } else {
-        // Media playlist → wrap in a master so subtitles can attach.
+        // Media playlist -> wrap in a master so subtitles can attach.
         out = ['#EXTM3U', ...subLines,
           `#EXT-X-STREAM-INF:BANDWIDTH=3000000${subs.length ? ',SUBTITLES="subs"' : ''}`,
           `http://${host}/seg/${id}?u=${encodeURIComponent(s.stream)}${amp}`].join('\n');
@@ -711,4 +767,12 @@ try {
   require('./heartbeat').start({ getLoad: () => sessions.size, capacity: SESSION_CAP, port: PORT });
 } catch (e) {
   console.warn('[heartbeat] not started:', e.message);
+}
+
+// Load the TMDB->AniList/MAL anime mapping (for anime sources + dub/sub). Async;
+// anime features stay disabled until it's ready, everything else works meanwhile.
+try {
+  require('./animemap').init();
+} catch (e) {
+  console.warn('[animemap] not started:', e.message);
 }

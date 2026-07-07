@@ -1,9 +1,22 @@
 # SlimeRelay — Setup Instructions
 
-Copy-paste friendly. Three parts: **deploy the relay once**, **run a server on each
-machine**, then **point the app at the relay**.
+## ⚠️ First: which setup are you doing?
 
-## Tokens first
+There are **two roles**, and most people only do the second one:
+
+- **Joining a friend's fleet (almost everyone).** You just **run a server** (Part B)
+  and point it at the relay **they** already run. **Do NOT deploy your own relay** —
+  you don't need a Cloudflare account, and a separate relay means your machine won't
+  show up on their dashboard or feed their app. Ask the fleet owner for **two things**:
+  their **relay URL** and the **fleet token**. Then skip straight to **Part B**.
+
+- **Setting up the whole system yourself (the fleet owner / admin).** Do **Part A**
+  once to deploy the relay, save the admin token, then do **Part B** on each machine.
+
+The #1 setup mistake is a friend deploying their own relay and generating their own
+token — then nothing connects. If you're joining someone, you only need Part B.
+
+## Tokens first (fleet owner only)
 
 You need one **fleet token** — the same value on every server and in the app.
 Generate it once:
@@ -17,7 +30,9 @@ the dashboard + controls); the deploy script generates that for you and prints i
 
 ---
 
-## Part A — Deploy the relay (once, ~5 min)
+## Part A — Deploy the relay (fleet owner only, once, ~5 min)
+
+**Skip this if you're joining someone else's fleet — go to Part B.**
 
 The relay is a free Cloudflare Worker. You need a (free) Cloudflare account.
 
@@ -27,6 +42,9 @@ The relay is a free Cloudflare Worker. You need a (free) Cloudflare account.
 cd relay
 ./deploy.sh <FLEET_TOKEN>          # Windows: ./deploy.ps1 <FLEET_TOKEN>
 ```
+
+> **Windows:** if PowerShell says scripts are disabled, run this once in the same
+> window first (session-only, safe): `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
 
 It installs wrangler, opens the browser to log in, creates the KV store, wires it
 into `wrangler.toml`, sets **both** secrets (`USER_TOKEN` = your `FLEET_TOKEN`, and
@@ -58,7 +76,7 @@ You'll see "0 servers connected" — expected until you start one.
 
 ## Part B — Run a server (each Mac / Windows / Linux box)
 
-Needs [Node 18+](https://nodejs.org).
+This is the part **everyone** does. Needs [Node 18+](https://nodejs.org).
 
 ```bash
 cd server
@@ -68,11 +86,17 @@ npm run doctor       # green-lights Node, Chromium, token, relay, and your addre
 npm start            # macOS/Linux: ./start.sh   •   Windows: double-click start.bat
 ```
 
-`setup` asks for your `FLEET_TOKEN`, the `RELAY` URL, a name, and which network
-address to advertise (it lists the ones it found). `doctor` then confirms the relay
-accepts your token and your address looks reachable — fix anything red before
-starting. Within ~30s the machine appears on the dashboard. Repeat on every box;
-each just needs the same `FLEET_TOKEN` and `RELAY` URL.
+When `setup` asks for the **fleet token**, **paste the exact token the fleet owner
+gave you** — don't type `new` (that generates a fresh token for a brand-new fleet
+of your own, which won't match theirs). For the **relay URL**, paste the owner's
+`https://slime-relay.THEIR-NAME.workers.dev`. `doctor` then confirms the relay
+accepts your token (a red "401" means your token doesn't match the fleet's) and your
+address looks reachable — fix anything red before starting. Within ~30s the machine
+appears on the owner's dashboard. Repeat on every box; each just needs the same
+fleet token and relay URL.
+
+> Keep the window open — closing it stops the server. On Windows, `start.bat` now
+> stays open and shows any error instead of flashing closed.
 
 ---
 
