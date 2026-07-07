@@ -38,6 +38,12 @@ and reuse it everywhere. Generate tokens with `openssl rand -hex 20`.
 
 ## 1. Run a server (macOS / Windows / Linux)
 
+> **Just joining a friend's fleet?** You only do this step — see **[JOIN.md](JOIN.md)**.
+> On Windows the easiest path is to double-click **`SlimeWatch-Server.cmd`** (it
+> installs Node + deps, configures, and starts). Fleet owners can hand friends a
+> ready-to-run package with `server/make-friend-installer.sh <RELAY_URL> <FLEET_TOKEN> <name>`
+> — the friend then answers nothing.
+
 **Prerequisite:** [Node.js 18+](https://nodejs.org).
 
 ```bash
