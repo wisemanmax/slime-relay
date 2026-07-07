@@ -20,6 +20,27 @@
 const HEARTBEAT_TTL = 90;
 const FRESH_MS = 60_000;
 
+// Current embed-provider domains the apps should use. Streaming sites rotate
+// domains constantly; the apps fetch this on launch and override their baked
+// defaults, so a rotation is a one-line edit here (or in the KV key "providers")
+// instead of a new app build. Edit + redeploy, or set the KV to override live.
+const DEFAULT_PROVIDERS = {
+  hosts: {
+    vidlink: 'vidlink.pro',
+    vidfast: 'vidfast.pro',
+    vidsrccc: 'vidsrc.cc',
+    embedsu: 'embed.su',
+    autoembed: 'player.autoembed.cc',
+    pstream: 'iframe.pstream.org',
+    vidsrcto: 'vidsrc.to',
+    vidsrcme: 'vidsrcme.ru',
+  },
+  animeHosts: {
+    vidsrccc: 'vidsrc.cc',
+    vidsrcicu: 'vidsrc.icu',
+  },
+};
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -28,6 +49,22 @@ export default {
       url.searchParams.get('key') || '';
     const isAdmin = !!env.ADMIN_TOKEN && provided === env.ADMIN_TOKEN;
     const isUser = isAdmin || (!!env.USER_TOKEN && provided === env.USER_TOKEN);
+
+    // ── Provider domains (PUBLIC — just domain names, no auth). Apps fetch this
+    // on launch so a rotated streaming domain is fixed here, not in a new build.
+    // Merges the KV "providers" override (if set) over the baked defaults. ──
+    if (url.pathname === '/providers') {
+      let override = null;
+      try { const raw = await env.SERVERS.get('providers'); override = raw ? JSON.parse(raw) : null; } catch {}
+      const cfg = {
+        hosts: { ...DEFAULT_PROVIDERS.hosts, ...(override?.hosts || {}) },
+        animeHosts: { ...DEFAULT_PROVIDERS.animeHosts, ...(override?.animeHosts || {}) },
+      };
+      return new Response(JSON.stringify(cfg), {
+        headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*',
+                   'cache-control': 'public, max-age=300' },
+      });
+    }
 
     // ── Server registration (fleet token — servers heartbeat with it) ──
     if (url.pathname === '/register' && request.method === 'POST') {
