@@ -36,6 +36,10 @@ and reuse it everywhere. Generate tokens with `openssl rand -hex 20`.
 
 ---
 
+> **Prefer not to run a server at all?** Point users at **Debrid** instead — a
+> ~$3/mo debrid account gives the best quality with nothing to install (the app
+> tries debrid first and falls back to the fleet). Setup: **[DEBRID.md](DEBRID.md)**.
+
 ## 1. Run a server (macOS / Windows / Linux)
 
 > **Just joining a friend's fleet?** You only do this step — see **[JOIN.md](JOIN.md)**.

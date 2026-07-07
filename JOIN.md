@@ -4,6 +4,11 @@ You're **adding your computer as a server** to a friend's SlimeWatch. You do **n
 need a Cloudflare account and you do **not** deploy anything — you just run a small
 program that shares your machine with their fleet.
 
+> **Don't want to run a server?** The easiest option is **Debrid** — for about
+> $3/month you get the best quality with nothing to install and no computer to keep
+> on. See **[DEBRID.md](DEBRID.md)**. You can do both (debrid *and* run a server),
+> but many people just do debrid.
+
 ## Step 1 — Get on Tailscale (free, one time)
 
 Tailscale is a free app that lets your host's Apple TV reach your PC over the
