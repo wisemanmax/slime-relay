@@ -117,18 +117,24 @@ matches it.
 
 ---
 
-## Networking: reaching servers across different places
+## Networking: reaching servers across different places (use Tailscale)
 
 The Apple TV must be able to *reach* each server's advertised address:
 
-- **All on one home network?** Nothing to do — leave `PUBLIC_ADDRESS` blank; each
-  server advertises its `10.0.0.x` / `192.168.x` LAN IP.
-- **Machines in different places?** Put them all on one overlay network — your
-  **NordVPN Meshnet** (or Tailscale) — and set each server's `PUBLIC_ADDRESS` to its
-  mesh IP, e.g. `http://100.71.4.9:8787`. `npm run doctor` lists the candidate
-  addresses and flags virtual adapters that won't work.
+- **All in one home?** Nothing to do — leave `PUBLIC_ADDRESS` blank; each server
+  advertises its `10.0.0.x` / `192.168.x` LAN IP.
+- **Machines in different homes?** Put the **Apple TV and every server** on
+  **[Tailscale](https://tailscale.com)** — a free mesh network (Personal plan: 6
+  users, unlimited devices) with a **native Apple TV app** (tvOS 17+). Everyone
+  installs Tailscale, signs in, and the owner adds them to the tailnet (or accepts
+  a shared machine). Each server then auto-advertises its Tailscale IP (`100.x.x.x`);
+  `npm run doctor` prefers it. No `PUBLIC_ADDRESS` to set by hand, no port-forwarding.
 
-No port-forwarding required.
+> **Not NordVPN Meshnet** — it was shut down in Dec 2025 and never had an Apple TV
+> app, so the TV could never join it. Tailscale is the free, TV-capable replacement.
+
+Traffic is direct device-to-device (WireGuard), so video streams straight from the
+server to the Apple TV — it doesn't route through Tailscale's servers.
 
 ---
 

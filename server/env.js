@@ -35,11 +35,11 @@ function classify(address, ifaceName) {
   const virtual = /(vethernet|virtualbox|vmware|hyper-v|wsl|docker|bridge100|loopback|zt|npcap)/.test(name);
   const [a, b] = address.split('.').map(Number);
   let kind = 'other', rank = 5;
-  // Mesh (Tailscale/NordVPN Meshnet) ranks ABOVE LAN: a mesh IP is reachable by
+  // A Tailscale IP (100.64/10, CGNAT range) ranks ABOVE LAN: it's reachable by
   // remote fleet peers AND locally, whereas a LAN IP only works on the same
-  // network — so for a cross-home fleet the mesh address is the safer auto-pick.
+  // network - so for a cross-home fleet the Tailscale address is the safer pick.
   if (a === 169 && b === 254) { kind = 'link-local'; rank = 9; }        // never reachable
-  else if (a === 100 && b >= 64 && b <= 127) { kind = 'mesh (Tailscale/NordVPN)', rank = 1; }
+  else if (a === 100 && b >= 64 && b <= 127) { kind = 'mesh (Tailscale)', rank = 1; }
   else if (a === 10) { kind = 'LAN', rank = 2; }
   else if (a === 192 && b === 168) { kind = 'LAN', rank = 2; }
   else if (a === 172 && b >= 16 && b <= 31) { kind = 'LAN', rank = 2; }

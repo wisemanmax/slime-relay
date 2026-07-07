@@ -41,8 +41,10 @@ ENV
 cat > "$OUT/READ ME FIRST.txt" <<TXT
 SlimeWatch Server - quick start (Windows)
 
-1. Join the mesh network your host invited you to (NordVPN Meshnet or Tailscale),
-   so your host's Apple TV can reach this PC. Do this BEFORE step 2.
+1. Install Tailscale (free) from https://tailscale.com/download and sign in
+   (Google / Apple / Microsoft - no credit card). Tell your host your Tailscale
+   name so they can add you to their network. This is what lets their Apple TV
+   reach this PC. Do this BEFORE step 2.
 
 2. Double-click  SlimeWatch-Server.cmd
 
@@ -61,5 +63,5 @@ else
   echo "Built folder: $OUT  (install 'zip' to auto-package, or zip it yourself)"
 fi
 echo
-echo "Send it to $WHO. They: join the mesh, unzip, double-click SlimeWatch-Server.cmd."
+echo "Send it to $WHO. They: install Tailscale + join your network, unzip, double-click SlimeWatch-Server.cmd."
 echo "No token or URL for them to type."

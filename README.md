@@ -59,10 +59,13 @@ plain English with the exact fix — if anything's off *before* you start. You
 should then see `SlimeWatch extractor on http://0.0.0.0:8787` and, if a relay is
 configured, `[heartbeat] … -> <relay>` — and the machine appears on the dashboard.
 
-> **Reaching servers across networks:** the Apple TV must be able to reach each
-> server's advertised address. On one home network that's automatic. Across
-> networks, put every machine on the same overlay (NordVPN Meshnet, Tailscale)
-> and, if `doctor` flags it, pin `PUBLIC_ADDRESS` to the mesh IP. No port-forwarding.
+> **Reaching servers across networks — use [Tailscale](https://tailscale.com) (free).**
+> The Apple TV must be able to reach each server's advertised address. On one home
+> network that's automatic. Across homes, put the **Apple TV and every server** on
+> **Tailscale** (free Personal plan: 6 users, unlimited devices; it has a native
+> Apple TV app, tvOS 17+). Each server then auto-advertises its Tailscale IP.
+> No port-forwarding. (NordVPN Meshnet is *not* an option — it was shut down in
+> Dec 2025 and never supported Apple TV.)
 
 ---
 
