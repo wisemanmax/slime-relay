@@ -49,21 +49,29 @@ async function main() {
   }
   token = tokAns;
 
+  // ---- Registration token ----
+  const currentFleetToken = cur('FLEET_TOKEN');
+  console.log('\n2) Registration token - server-only REGISTRATION token for /register.');
+  console.log('   The relay owner shares this value. It is separate from the app token above.');
+  console.log('   Leave blank to reuse the fleet token above.');
+  if (currentFleetToken) console.log('   Existing FLEET_TOKEN is set; press Enter to keep it.');
+  const fleetToken = (await ask('   FLEET_TOKEN', '')) || currentFleetToken;
+
   // ---- Relay URL ----
-  console.log('\n2) Relay URL - where this server registers. The relay owner gives you this,');
+  console.log('\n3) Relay URL - where this server registers. The relay owner gives you this,');
   console.log('   e.g. https://slime-relay.THEIR-NAME.workers.dev  (do NOT deploy your own).');
   console.log('   Leave blank only to run standalone (no dashboard / no fleet).');
   const relay = (await ask('   RELAY_URL', cur('RELAY_URL'))).replace(/\/+$/, '');
 
   // -- Name --
-  console.log('\n3) Friendly name shown on the dashboard.');
+  console.log('\n4) Friendly name shown on the dashboard.');
   const name = await ask('   SERVER_NAME', cur('SERVER_NAME') || os.hostname());
 
   // -- Port --
-  const port = await ask('\n4) Port to listen on', cur('PORT') || '8787');
+  const port = await ask('\n5) Port to listen on', cur('PORT') || '8787');
 
   // -- Public address --
-  console.log('\n5) How the Apple TV / app reaches THIS machine.');
+  console.log('\n6) How the Apple TV / app reaches THIS machine.');
   const cands = ipv4Candidates(port);
   if (cands.length) {
     console.log('   Detected addresses on this machine:');
@@ -85,6 +93,7 @@ async function main() {
 # .env is gitignored - never commit it.
 
 SLIME_TOKEN=${token}
+FLEET_TOKEN=${fleetToken}
 PORT=${port}
 RELAY_URL=${relay}
 PUBLIC_ADDRESS=${publicAddr}
