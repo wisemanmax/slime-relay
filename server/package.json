@@ -7,7 +7,8 @@
     "start": "node server.js",
     "setup": "node setup.js",
     "doctor": "node doctor.js",
-    "postinstall": "playwright install chromium"
+    "postinstall": "playwright install chromium",
+    "test": "node --check server.js && node --check batcave.js && node --check heartbeat.js && node --check env.js && node --check setup.js && node --check doctor.js"
   },
   "engines": {
     "node": ">=18"
