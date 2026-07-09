@@ -146,7 +146,7 @@ Run **`npm run doctor`** first — it diagnoses most of these automatically.
 |---|---|
 | `SLIME_TOKEN is not set` on start | Run `npm run setup` (or set `SLIME_TOKEN` in `.env`). The server won't run tokenless on purpose. |
 | Dashboard shows "Admin access required" | Use `?key=<ADMIN_TOKEN>` (the admin token, **not** the fleet token). |
-| Server never appears on the dashboard | `doctor` will say why. Usually: relay rejected the token (**401 → `SLIME_TOKEN` ≠ relay `USER_TOKEN`**), or `RELAY_URL` is wrong/blank. |
+| Server never appears on the dashboard | `doctor` will say why. Usually: relay rejected registration (**401 → this server's `FLEET_TOKEN` ≠ the relay's `FLEET_TOKEN`**; until the relay sets `FLEET_TOKEN`, it falls back to `SLIME_TOKEN` = `USER_TOKEN`), or `RELAY_URL` is wrong/blank. |
 | Appears then vanishes | Heartbeats stopped → the server process died or lost network. It auto-drops after 90s. |
 | App says "couldn't reach any server" | The advertised address isn't reachable from the Apple TV. `doctor` prints your addresses; pin `PUBLIC_ADDRESS` to the LAN/mesh one (avoid virtual adapters). Test `http://<address>/health` in a browser → should say `ok`. |
 | Windows: double-clicking `start.bat` flashes and closes | It now stays open and shows the error. If it says Node is missing, install [Node 18+](https://nodejs.org); if Chromium is missing, run `npx playwright install chromium` in `server/`. |

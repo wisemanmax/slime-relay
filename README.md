@@ -23,16 +23,21 @@ the best one — spreading load across the whole fleet and failing over if one d
 
 ---
 
-## Two tokens (roles)
+## Three tokens (roles)
 
 | Token | Who has it | What it unlocks |
 |---|---|---|
-| **`USER_TOKEN`** (the *fleet* token) | every server + the app (baked in) | streaming + routing (`/route`), heartbeat registration |
+| **`USER_TOKEN`** (the *app/streaming* token) | every server (as `SLIME_TOKEN`) + the app (baked in) | streaming + routing (`/route`), presence |
+| **`FLEET_TOKEN`** (server-only registration) | the relay + every server (never the app) | `/register` — the credential a server uses to join the fleet |
 | **`ADMIN_TOKEN`** | just you | the dashboard, the full fleet (names/addresses/load), and routing controls (disable / prefer a server) |
 
 Regular users are routed to a server automatically but never see the fleet.
-The **fleet token is the same value** as each server's `SLIME_TOKEN` — pick it once
-and reuse it everywhere. Generate tokens with `openssl rand -hex 20`.
+The **app/streaming token is the same value** as each server's `SLIME_TOKEN`
+(`SLIME_TOKEN` = `USER_TOKEN`) — pick it once and reuse it everywhere. The
+**registration token is a separate value**: the owner sets it on the relay with
+`wrangler secret put FLEET_TOKEN` and shares that SAME value with each server (in
+its `.env` as `FLEET_TOKEN`), so the app's baked-in token can't register or
+overwrite servers. Generate tokens with `openssl rand -hex 20`.
 
 ---
 
@@ -123,3 +128,4 @@ spreads out as you add machines. Lower a box's ceiling via `SESSION_CAP` in
 - ✅ Cross-platform extractor with guided setup + `doctor` self-check
 - ✅ Cloudflare relay + live dashboard with admin routing controls
 - ✅ App auto-routes across the whole fleet (reachable + least-loaded, with failover)
+- ✅ Each server also serves comics at `/comic/*` (batcave) automatically — no extra setup
