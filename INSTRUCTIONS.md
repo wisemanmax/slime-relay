@@ -7,8 +7,9 @@ There are **two roles**, and most people only do the second one:
 - **Joining a friend's fleet (almost everyone).** You just **run a server** (Part B)
   and point it at the relay **they** already run. **Do NOT deploy your own relay** —
   you don't need a Cloudflare account, and a separate relay means your machine won't
-  show up on their dashboard or feed their app. Ask the fleet owner for **two things**:
-  their **relay URL** and the **fleet token**. Then skip straight to **Part B**.
+  show up on their dashboard or feed their app. Ask the fleet owner for **three things**:
+  their **relay URL**, the **app token** (stored as `SLIME_TOKEN`), and the
+  **`FLEET_TOKEN`** (server-only registration). Then skip straight to **Part B**.
 
 - **Setting up the whole system yourself (the fleet owner / admin).** Do **Part A**
   once to deploy the relay, save the admin token, then do **Part B** on each machine.
@@ -90,14 +91,16 @@ npm run doctor       # green-lights Node, Chromium, token, relay, and your addre
 npm start            # macOS/Linux: ./start.sh   •   Windows: double-click start.bat
 ```
 
-When `setup` asks for the **fleet token**, **paste the exact token the fleet owner
-gave you** — don't type `new` (that generates a fresh token for a brand-new fleet
-of your own, which won't match theirs). For the **relay URL**, paste the owner's
+When `setup` asks for the **app token** (`SLIME_TOKEN`), **paste the exact token the
+fleet owner gave you** — don't type `new` (that generates a fresh token for a
+brand-new fleet of your own, which won't match theirs). Next it asks for the
+**`FLEET_TOKEN`** (server-only registration) — paste the owner's value, or leave it
+blank to reuse the app token. For the **relay URL**, paste the owner's
 `https://slime-relay.THEIR-NAME.workers.dev`. `doctor` then confirms the relay
-accepts your token (a red "401" means your token doesn't match the fleet's) and your
+accepts your tokens (a red "401" means a token doesn't match the fleet's) and your
 address looks reachable — fix anything red before starting. Within ~30s the machine
 appears on the owner's dashboard. Repeat on every box; each just needs the same
-fleet token and relay URL.
+app token, `FLEET_TOKEN`, and relay URL.
 
 > Keep the window open — closing it stops the server. On Windows, `start.bat` now
 > stays open and shows any error instead of flashing closed.

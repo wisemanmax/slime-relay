@@ -36,16 +36,16 @@ async function main() {
   // Most people are JOINING someone else's fleet: they must paste the exact
   // token the relay owner gave them. Auto-generating here (the old default) was
   // a footgun -- pressing Enter minted a NEW token that didn't match the fleet.
-  console.log('1) Fleet token - the shared secret for your fleet.');
+  console.log('1) App token - the app/streaming token, stored here as SLIME_TOKEN.');
   console.log('   JOINING someone\'s fleet? Paste the EXACT token they gave you (their relay USER_TOKEN).');
   console.log('   Every server + the app on one fleet use the SAME value.');
   console.log('   Starting your OWN brand-new relay from scratch? Type  new  to generate one.');
   let token = cur('SLIME_TOKEN') && cur('SLIME_TOKEN') !== 'change-me' ? cur('SLIME_TOKEN') : '';
-  let tokAns = await ask('   Fleet token (paste it, or "new")', token);
+  let tokAns = await ask('   App token (paste it, or "new")', token);
   if (tokAns.toLowerCase() === 'new') {
     tokAns = crypto.randomBytes(20).toString('hex');
-    console.log('   -> Generated a NEW fleet token: ' + tokAns);
-    console.log('      Use this SAME value as your relay USER_TOKEN and in the app.');
+    console.log('   -> Generated a NEW app token and saved it as SLIME_TOKEN in .env.');
+    console.log('      Read it from .env and use the SAME value as your relay USER_TOKEN and in the app.');
   }
   token = tokAns;
 
@@ -53,9 +53,11 @@ async function main() {
   const currentFleetToken = cur('FLEET_TOKEN');
   console.log('\n2) Registration token - server-only REGISTRATION token for /register.');
   console.log('   The relay owner shares this value. It is separate from the app token above.');
-  console.log('   Leave blank to reuse the fleet token above.');
+  console.log('   Leave blank to reuse the app token (SLIME_TOKEN) above.');
   if (currentFleetToken) console.log('   Existing FLEET_TOKEN is set; press Enter to keep it.');
-  const fleetToken = (await ask('   FLEET_TOKEN', '')) || currentFleetToken;
+  // Blank reuses SLIME_TOKEN: keep an existing FLEET_TOKEN on re-run, else fall
+  // back to the app token above (matches heartbeat.js / doctor.js runtime fallback).
+  const fleetToken = (await ask('   FLEET_TOKEN', '')) || currentFleetToken || token;
 
   // ---- Relay URL ----
   console.log('\n3) Relay URL - where this server registers. The relay owner gives you this,');
