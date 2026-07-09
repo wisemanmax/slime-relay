@@ -9,15 +9,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 RELAY="${1:-}"; APP_TOKEN="${2:-}"; FLEET="${3:-}"; WHO="${4:-friend}"
-if [ -z "$RELAY" ] || [ -z "$APP_TOKEN" ]; then
+if [ -z "$RELAY" ] || [ -z "$APP_TOKEN" ] || [ -z "$FLEET" ]; then
   echo "Usage: ./make-friend-installer.sh <RELAY_URL> <APP_TOKEN> <FLEET_TOKEN> [friend-name]"
   echo "  e.g. ./make-friend-installer.sh https://slime-relay.you.workers.dev app_3d9f... fleet_aa5f... alex"
-  echo "  Two-arg fallback: ./make-friend-installer.sh <RELAY_URL> <TOKEN> uses TOKEN for both."
   exit 1
-fi
-if [ -z "$FLEET" ]; then
-  FLEET="$APP_TOKEN"
-  echo "Note: only one token was provided; using it for both SLIME_TOKEN and FLEET_TOKEN."
 fi
 RELAY="${RELAY%/}"                       # trim trailing slash
 SAFE_WHO="$(printf '%s' "$WHO" | tr ' /' '__')"
@@ -26,7 +21,7 @@ rm -rf "$OUT" "$OUT.zip"
 mkdir -p "$OUT"
 
 # Copy just what a server needs to run (no node_modules, no cache, no secrets-in-git).
-for f in server.js extract.js heartbeat.js env.js setup.js doctor.js animemap.js \
+for f in server.js extract.js heartbeat.js env.js setup.js doctor.js animemap.js batcave.js \
          package.json SlimeWatch-Server.cmd start.bat start.ps1 start.sh; do
   [ -f "$f" ] && cp "$f" "$OUT/"
 done
