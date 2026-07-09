@@ -1,11 +1,14 @@
-# One-shot relay deploy (Windows). Usage:  ./deploy.ps1 [UserToken] [AdminToken]
-#   UserToken  = fleet token, same value as your app's SLIME_TOKEN (routing + heartbeat)
+# One-shot relay deploy (Windows). Usage:  ./deploy.ps1 [UserToken] [FleetToken] [AdminToken]
+#   UserToken  = app/streaming token, same value as your app's SLIME_TOKEN (routing)
+#   FleetToken = server-only registration token, same value as each server's FLEET_TOKEN
 #   AdminToken = private admin key for the dashboard + fleet controls (auto-generated if omitted)
-param([string]$UserToken, [string]$AdminToken)
+param([string]$UserToken, [string]$FleetToken, [string]$AdminToken)
 Set-Location $PSScriptRoot
 
-if (-not $UserToken) { $UserToken = Read-Host "Fleet token (USER_TOKEN - same as your app's SLIME_TOKEN)" }
-if (-not $UserToken) { Write-Error "A fleet token is required."; exit 1 }
+if (-not $UserToken) { $UserToken = Read-Host "App/streaming token (USER_TOKEN - same as your app's SLIME_TOKEN)" }
+if (-not $UserToken) { Write-Error "A USER_TOKEN is required."; exit 1 }
+if (-not $FleetToken) { $FleetToken = Read-Host "Server registration token (FLEET_TOKEN - never bake this into the app)" }
+if (-not $FleetToken) { Write-Error "A FLEET_TOKEN is required."; exit 1 }
 if (-not $AdminToken) {
   $bytes = New-Object 'System.Byte[]' 20
   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
@@ -31,6 +34,8 @@ if (Select-String -Path wrangler.toml -Pattern "PASTE_KV_NAMESPACE_ID_HERE" -Qui
 
 Write-Host "-> Setting USER_TOKEN secret..."
 $UserToken  | npx wrangler secret put USER_TOKEN
+Write-Host "-> Setting FLEET_TOKEN secret..."
+$FleetToken | npx wrangler secret put FLEET_TOKEN
 Write-Host "-> Setting ADMIN_TOKEN secret..."
 $AdminToken | npx wrangler secret put ADMIN_TOKEN
 

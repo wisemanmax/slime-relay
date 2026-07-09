@@ -18,15 +18,17 @@ token — then nothing connects. If you're joining someone, you only need Part B
 
 ## Tokens first (fleet owner only)
 
-You need one **fleet token** — the same value on every server and in the app.
-Generate it once:
+You need two values: a `USER_TOKEN` for the app/streaming path, and a distinct
+`FLEET_TOKEN` for server-only registration. Generate each with:
 
 ```bash
 openssl rand -hex 20
 ```
 
-Call this value `FLEET_TOKEN`. The relay also gets a separate **admin token** (for
-the dashboard + controls); the deploy script generates that for you and prints it.
+Use `USER_TOKEN` as the app token and each server's `SLIME_TOKEN`. Use
+`FLEET_TOKEN` only on the relay and in each server's `.env` as `FLEET_TOKEN`.
+The relay also gets a separate **admin token** (for the dashboard + controls); the
+deploy script generates that for you and prints it.
 
 ---
 
@@ -40,15 +42,16 @@ The relay is a free Cloudflare Worker. You need a (free) Cloudflare account.
 
 ```bash
 cd relay
-./deploy.sh <FLEET_TOKEN>          # Windows: ./deploy.ps1 <FLEET_TOKEN>
+./deploy.sh <USER_TOKEN> <FLEET_TOKEN>          # Windows: ./deploy.ps1 <USER_TOKEN> <FLEET_TOKEN>
 ```
 
 > **Windows:** if PowerShell says scripts are disabled, run this once in the same
 > window first (session-only, safe): `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
 
 It installs wrangler, opens the browser to log in, creates the KV store, wires it
-into `wrangler.toml`, sets **both** secrets (`USER_TOKEN` = your `FLEET_TOKEN`, and
-a generated `ADMIN_TOKEN` it prints — **copy it somewhere safe**), and deploys.
+into `wrangler.toml`, sets `USER_TOKEN` (app/streaming), sets `FLEET_TOKEN`
+(server-only registration), generates an `ADMIN_TOKEN` it prints — **copy it
+somewhere safe** — and deploys.
 
 ### Or step by step
 
@@ -58,7 +61,8 @@ npm install
 npx wrangler login                        # opens your browser, click Allow
 npx wrangler kv namespace create SERVERS  # copy the printed id…
 #   …paste it into wrangler.toml in place of PASTE_KV_NAMESPACE_ID_HERE
-printf '%s' "<FLEET_TOKEN>" | npx wrangler secret put USER_TOKEN
+printf '%s' "<USER_TOKEN>" | npx wrangler secret put USER_TOKEN
+printf '%s' "<FLEET_TOKEN>" | npx wrangler secret put FLEET_TOKEN
 printf '%s' "$(openssl rand -hex 20)" | npx wrangler secret put ADMIN_TOKEN  # save this value!
 npm run deploy                            # prints your URL
 ```
@@ -112,8 +116,8 @@ automatically.
   server and **Disable / Enable / Prefer** them from the couch. Same controls as the
   web dashboard; changes apply to every device.
 
-The app's fleet token is already baked in — just make sure your `FLEET_TOKEN`
-matches it.
+The app's streaming token is already baked in — just make sure it matches your
+`USER_TOKEN`.
 
 ---
 

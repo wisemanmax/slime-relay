@@ -84,13 +84,13 @@ The relay is a free, always-on Cloudflare Worker. You need a (free) Cloudflare a
 
 ```bash
 cd relay
-./deploy.sh <FLEET_TOKEN>        # Windows: ./deploy.ps1 <FLEET_TOKEN>
+./deploy.sh <USER_TOKEN> <FLEET_TOKEN>        # Windows: ./deploy.ps1 <USER_TOKEN> <FLEET_TOKEN>
 ```
 
 One command: it installs wrangler, opens the browser to log in, creates the KV
-store, sets **both** tokens (your `<FLEET_TOKEN>` as `USER_TOKEN`, plus a freshly
-generated `ADMIN_TOKEN` it prints — **save it**), and deploys. It ends by printing
-your dashboard URL.
+store, sets `USER_TOKEN` (app/streaming), sets `FLEET_TOKEN` (server-only
+registration), generates an `ADMIN_TOKEN` it prints — **save it** — and deploys.
+It ends by printing your dashboard URL.
 
 - **Admin dashboard:** `https://…workers.dev/?key=<ADMIN_TOKEN>` — see every server,
   and **Disable / Enable / Prefer** any of them. Changes apply to every device at once.

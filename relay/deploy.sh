@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
 # One-shot relay deploy: installs wrangler, logs you into Cloudflare, creates the
-# KV store, wires it into wrangler.toml, sets both role tokens, and deploys.
+# KV store, wires it into wrangler.toml, sets all three role tokens, and deploys.
 #
-# Two roles:
-#   USER_TOKEN  = the fleet token - SAME value as your app's SLIME_TOKEN and each
-#                 server's SLIME_TOKEN. Everyone streaming has it (it's baked into
-#                 the apps). Grants routing (/route) + heartbeat registration.
+# Three roles:
+#   USER_TOKEN  = the app/streaming token - SAME value as your app's SLIME_TOKEN
+#                 and each server's SLIME_TOKEN. Grants routing (/route).
+#   FLEET_TOKEN = the server-only registration token. Set the SAME value as each
+#                 server's FLEET_TOKEN. Never bake this into the app.
 #   ADMIN_TOKEN = a private admin token - only YOU. Unlocks the dashboard, the full
 #                 fleet (names/addresses/load), and routing controls. Auto-generated
 #                 if you don't pass one.
 #
-# Usage:  ./deploy.sh [USER_TOKEN] [ADMIN_TOKEN]
+# Usage:  ./deploy.sh [USER_TOKEN] [FLEET_TOKEN] [ADMIN_TOKEN]
 set -euo pipefail
 cd "$(dirname "$0")"
 
 USER_TOKEN="${1:-}"
-ADMIN_TOKEN="${2:-}"
+FLEET_TOKEN="${2:-}"
+ADMIN_TOKEN="${3:-}"
 if [ -z "$USER_TOKEN" ]; then
-  read -rp "Fleet token (USER_TOKEN - same value as your app's SLIME_TOKEN): " USER_TOKEN
+  read -rp "App/streaming token (USER_TOKEN - same value as your app's SLIME_TOKEN): " USER_TOKEN
 fi
-[ -z "$USER_TOKEN" ] && { echo "A fleet token is required."; exit 1; }
+[ -z "$USER_TOKEN" ] && { echo "A USER_TOKEN is required."; exit 1; }
+if [ -z "$FLEET_TOKEN" ]; then
+  read -rp "Server registration token (FLEET_TOKEN - never bake this into the app): " FLEET_TOKEN
+fi
+[ -z "$FLEET_TOKEN" ] && { echo "A FLEET_TOKEN is required."; exit 1; }
 if [ -z "$ADMIN_TOKEN" ]; then
   ADMIN_TOKEN="$(openssl rand -hex 20)"
   echo "-> Generated a new ADMIN_TOKEN (save this - it's your dashboard/admin key):"
@@ -45,6 +51,8 @@ fi
 
 echo "-> Setting USER_TOKEN secret..."
 printf '%s' "$USER_TOKEN"  | npx wrangler secret put USER_TOKEN
+echo "-> Setting FLEET_TOKEN secret..."
+printf '%s' "$FLEET_TOKEN" | npx wrangler secret put FLEET_TOKEN
 echo "-> Setting ADMIN_TOKEN secret..."
 printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
 
