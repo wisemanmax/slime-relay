@@ -71,6 +71,15 @@ REM --- 4) Quick health check, then run -----------------------------
 echo(
 echo Checking everything is ready...
 node doctor.js
+if errorlevel 1 (
+  echo(
+  echo   Doctor found a problem.
+  echo   Send the checklist above to your host.
+  echo   The server will not start until those items are fixed.
+  echo(
+  pause
+  exit /b 1
+)
 echo(
 echo ------------------------------------------------------------
 echo  Starting the server. KEEP THIS WINDOW OPEN to stay online.

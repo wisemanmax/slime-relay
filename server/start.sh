@@ -13,4 +13,12 @@ if [ ! -f .env ]; then
   node setup.js || exit 1
 fi
 
+if [ -f .env ]; then
+  echo "Checking everything is ready..."
+  node doctor.js || {
+    echo "Fix the items above, then re-run."
+    exit 1
+  }
+fi
+
 exec node server.js
