@@ -114,8 +114,20 @@ export const PAGE = `<!doctype html>
     padding:8px 12px;font-size:14px}
   .player .x{background:var(--panel);color:#fff;border:1px solid var(--line);border-radius:10px;
     padding:8px 14px;cursor:pointer;font-weight:700}
-  .player iframe{flex:1;width:100%;border:0;background:#000}
+  .player .stage{flex:1;position:relative;background:#000;min-height:0}
+  .player .stage video,.player .stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000}
+  .player .ploading{position:absolute;inset:0;display:none;place-items:center;text-align:center;
+    color:var(--dim);font-size:15px;background:#000;padding:0 24px}
+  .player .ploading.on{display:grid}
   .player .hint{padding:6px 16px;font-size:12px;color:var(--dim2);background:#0a0d0b}
+  .player .hint b{color:var(--accent)}
+  .pbadge{font-size:11px;font-weight:800;letter-spacing:1px;color:var(--accent);
+    background:rgba(55,226,154,.14);border:1px solid rgba(55,226,154,.4);padding:3px 9px;border-radius:20px}
+  .player .upnext{position:absolute;right:18px;bottom:18px;background:rgba(10,13,11,.92);
+    border:1px solid var(--line);border-radius:12px;padding:10px 16px;font-size:14px;font-weight:700;
+    color:var(--txt);opacity:0;transform:translateY(8px);transition:.3s;pointer-events:none}
+  .player .upnext.on{opacity:1;transform:none}
+  .player .upnext b{color:var(--accent)}
 
   @media(max-width:640px){
     header{gap:12px;padding:12px 14px}
@@ -123,6 +135,7 @@ export const PAGE = `<!doctype html>
     .search-box input{width:96px}
   }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
 </head>
 <body>
   <header>
@@ -132,20 +145,28 @@ export const PAGE = `<!doctype html>
       <span style="color:var(--dim)">⌕</span>
       <input id="q" placeholder="Search…" autocomplete="off">
     </div>
+    <span class="logout" onclick="openSettings()" title="Debrid settings" style="font-size:18px;line-height:1">⚙</span>
     <span class="logout" onclick="location.href='/logout'">Sign out</span>
   </header>
   <main id="main"></main>
 
   <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+  <div class="modal" id="setmodal"><div class="sheet" id="setsheet" style="max-width:540px;margin-top:70px"></div></div>
   <div class="player" id="player">
     <div class="bar">
       <span class="pt" id="ptitle"></span>
+      <span class="pbadge" id="pbadge" style="display:none">⚡ DEBRID</span>
       <label style="color:var(--dim);font-size:13px">Source</label>
       <select id="psel" onchange="switchProvider()"></select>
       <button class="x" onclick="closePlayer()">✕ Close</button>
     </div>
-    <iframe id="pframe" allowfullscreen allow="autoplay; fullscreen; encrypted-media"></iframe>
-    <div class="hint">Ads are served by the source — a browser ad blocker (uBlock Origin) makes this ad-free.</div>
+    <div class="stage">
+      <video id="pvideo" controls playsinline preload="auto" style="display:none"></video>
+      <iframe id="pframe" allowfullscreen allow="autoplay; fullscreen; encrypted-media" style="display:none"></iframe>
+      <div class="ploading on" id="ploading">Finding the best source…</div>
+      <div class="upnext" id="pupnext"></div>
+    </div>
+    <div class="hint" id="phint"></div>
   </div>
 
 <script>
@@ -163,23 +184,34 @@ const PROVIDERS = [
   ['embedsu','Embed.su',(t,k,s,e)=> k==='movie'?\`https://embed.su/embed/movie/\${t}\`:\`https://embed.su/embed/tv/\${t}/\${s}/\${e}\`],
   ['autoembed','AutoEmbed',(t,k,s,e)=> k==='movie'?\`https://player.autoembed.cc/embed/movie/\${t}\`:\`https://player.autoembed.cc/embed/tv/\${t}/\${s}/\${e}\`],
   ['vidfast','VidFast',(t,k,s,e)=> k==='movie'?\`https://vidfast.pro/movie/\${t}?autoPlay=true\`:\`https://vidfast.pro/tv/\${t}/\${s}/\${e}?autoPlay=true\`],
+  ['pstream','P-Stream',(t,k,s,e)=> k==='movie'?\`https://iframe.pstream.org/embed/tmdb-movie-\${t}\`:\`https://iframe.pstream.org/embed/tmdb-tv-\${t}/\${s}/\${e}\`],
 ];
 
 // localStorage watch state
 const load = (k,d)=> { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const save = (k,v)=> localStorage.setItem(k,JSON.stringify(v));
+const getRdKey = ()=> load('sw_rdkey','');   // BYO Real-Debrid token, this browser only
 const myList = ()=> load('sw_list',[]);
 const inList = (id,k)=> myList().some(x=>x.id===id && x.kind===k);
 function toggleList(it){ const k=kindOf(it),id=it.id; let l=myList();
   if(inList(id,k)) l=l.filter(x=>!(x.id===id&&x.kind===k));
   else l.unshift({id,kind:k,title:titleOf(it),poster:it.poster_path,backdrop:it.backdrop_path});
   save('sw_list',l.slice(0,60)); }
-function recordContinue(it,k,s,e){ let c=load('sw_continue',[]).filter(x=>!(x.id===it.id&&x.kind===k));
-  c.unshift({id:it.id,kind:k,title:titleOf(it),poster:it.poster_path,backdrop:it.backdrop_path,s,e,ts:Date.now()});
+function recordContinue(it,k,s,e,pos){ let c=load('sw_continue',[]).filter(x=>!(x.id===it.id&&x.kind===k));
+  c.unshift({id:it.id,kind:k,title:titleOf(it),poster:it.poster_path,backdrop:it.backdrop_path,s,e,pos:pos||0,ts:Date.now()});
   save('sw_continue',c.slice(0,24)); }
+// Persisted resume position for the debrid <video> path.
+function savedPos(id,kind,s,e){ const r=load('sw_continue',[]).find(x=>x.id===id&&x.kind===kind&&x.s===s&&x.e===e); return (r&&r.pos)||0; }
+function saveProgress(pos,dur){ if(!pCtx||!(pos>0)) return; let c=load('sw_continue',[]);
+  const i=c.findIndex(x=>x.id===pCtx.it.id&&x.kind===pCtx.kind); if(i<0) return;
+  c[i].pos=Math.floor(pos); if(dur) c[i].dur=Math.floor(dur); c[i].s=pCtx.s; c[i].e=pCtx.e; c[i].ts=Date.now();
+  save('sw_continue',c); }
+function resumeItem(id,kind){ const rec=load('sw_continue',[]).find(x=>x.id===id&&x.kind===kind);
+  if(!rec) return openDetail(id,kind);
+  play({id,media_type:kind,title:rec.title,poster_path:rec.poster,backdrop_path:rec.backdrop}, kind, rec.s||1, rec.e||1); }
 
 // ── Rendering ──
-const NAV = [['home','Home'],['movies','Movies'],['tv','TV'],['anime','Anime'],['list','My List']];
+const NAV = [['home','Home'],['movies','Movies'],['tv','TV'],['live','Live'],['anime','Anime'],['list','My List']];
 function renderNav(active){ document.getElementById('nav').innerHTML =
   NAV.map(([r,l])=>\`<a class="\${r===active?'on':''}" onclick="go('#\${r}')">\${l}</a>\`).join(''); }
 
@@ -242,8 +274,11 @@ async function viewHome(){ const main=document.getElementById('main'); main.inne
 }
 function rowResume(items){ return \`<div class="row"><h2>Continue Watching</h2><div class="track">\`+
   items.map(it=>{ const p=IMG(it.poster_path,'w342'),k=kindOf(it);
-    return \`<div class="card" onclick="openDetail(\${it.id},'\${k}')">\`+
+    const rec=load('sw_continue',[]).find(x=>x.id===it.id&&x.kind===k);
+    const pct=(rec&&rec.dur&&rec.pos)?Math.min(100,Math.round(100*rec.pos/rec.dur)):0;
+    return \`<div class="card" onclick="resumeItem(\${it.id},'\${k}')">\`+
       (p?\`<img loading="lazy" src="\${p}">\`:\`<div class="ph">▦</div>\`)+
+      (pct>2?\`<div class="prog"><i style="width:\${pct}%"></i></div>\`:'')+
       \`<div class="t">\${esc(titleOf(it))}</div></div>\`; }).join('')+\`</div></div>\`; }
 
 async function viewList(kind, title, endpoints){ const main=document.getElementById('main');
@@ -294,6 +329,37 @@ async function openDetail(id,kind){ const modal=document.getElementById('modal')
 }
 function closeDetail(){ document.getElementById('modal').classList.remove('open'); }
 
+// ── Connect Debrid (BYO key, stored in this browser — mirrors the iOS/tvOS flow) ──
+function openSettings(){ const m=document.getElementById('setmodal'), sh=document.getElementById('setsheet');
+  closeDetail(); m.classList.add('open'); const key=getRdKey();
+  sh.innerHTML=\`<div class="body" style="margin-top:0;padding:30px 30px 32px">
+    <h1 style="font-size:24px;margin:0 0 6px">Debrid <span style="color:var(--accent)">HD</span></h1>
+    <p class="ov" style="margin:6px 0 18px">Play clean, ad-free HD straight from your own Real-Debrid account — tried before the embed sources, just like the iOS &amp; TV apps. Your key is stored <b>only in this browser</b> and sent per request; it's never a shared server secret. <a href="https://real-debrid.com/apitoken" target="_blank" rel="noopener" style="color:var(--accent)">Get your API token ↗</a></p>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="rdfield" type="password" placeholder="Paste your Real-Debrid API token" value="\${esc(key)}"
+        style="flex:1;padding:12px 14px;border-radius:11px;border:1px solid var(--line);background:#0d120f;color:var(--txt);font-size:15px" autocomplete="off" autocapitalize="off" spellcheck="false"
+        onkeydown="if(event.key==='Enter')connectDebrid()">
+      <button class="btn play" style="padding:0 22px" onclick="connectDebrid()">Connect</button>
+    </div>
+    <div id="rdstatus" style="font-size:13px;min-height:20px;color:var(--dim)">\${key?'✓ A key is saved on this device.':''}</div>
+    <div class="btns" style="margin-top:18px">
+      <button class="btn ghost" onclick="closeSettings()">Done</button>
+      \${key?'<button class="btn ghost" style="color:#f4665f" onclick="removeDebrid()">Remove key</button>':''}
+    </div>
+  </div>\`;
+}
+function closeSettings(){ document.getElementById('setmodal').classList.remove('open'); }
+async function connectDebrid(){ const f=document.getElementById('rdfield'), st=document.getElementById('rdstatus');
+  const key=(f.value||'').trim(); if(!key){ st.style.color='#f4665f'; st.textContent='Paste your token first.'; return; }
+  st.style.color='var(--dim)'; st.textContent='Checking…';
+  try{ const r=await fetch('/api/rdcheck',{headers:{'x-rd-key':key}}); const j=await r.json();
+    if(j.valid){ save('sw_rdkey',key); st.style.color='var(--accent)';
+      st.innerHTML='✓ Connected'+(j.name?' as <b>'+esc(j.name)+'</b>':'')+'. Debrid HD is on — reopen the player to use it.'; }
+    else { st.style.color='#f4665f'; st.textContent = j.reason==='invalid'?'Real-Debrid rejected that token — check it and try again.':'Couldn\\'t reach Real-Debrid — try again in a moment.'; }
+  } catch { st.style.color='#f4665f'; st.textContent='Network error — try again.'; }
+}
+function removeDebrid(){ localStorage.removeItem('sw_rdkey'); openSettings(); }
+
 let curSeason=1;
 function renderSeasons(d){ const seasons=(d.seasons||[]).filter(s=>s.season_number>0 && s.episode_count>0);
   if(!seasons.length) return; curSeason=seasons[0].season_number;
@@ -317,29 +383,142 @@ async function loadSeason(tvid, n){ curSeason=n;
 function playFromDetail(){ if(!current) return;
   if(current._kind==='tv'){ play(current,'tv',curSeason,1); } else { play(current,'movie',1,1); } }
 
-// ── Player ──
-let pCtx=null;
-function play(it,kind,s,e){ pCtx={it,kind,s,e};
-  const sel=document.getElementById('psel');
-  sel.innerHTML=PROVIDERS.map(([id,name])=>\`<option value="\${id}">\${name}</option>\`).join('');
+// ── Player (debrid HD first, then embed providers — mirrors the apps' ladder) ──
+let pCtx=null, pDebrid=[], resumeAt=0, progTick=null;
+function play(it,kind,s,e){ pCtx={it,kind,s,e}; resumeAt=savedPos(it.id,kind,s,e);
   document.getElementById('ptitle').textContent=titleOf(it)+(kind==='tv'?\` · S\${s} E\${e}\`:'');
-  recordContinue(it,kind,s,e);
-  loadFrame(PROVIDERS[0][0]);
+  recordContinue(it,kind,s,e,resumeAt);
+  hideUpNext();
+  document.getElementById('psel').innerHTML='<option>Loading…</option>';
+  const v0=document.getElementById('pvideo'); v0.onerror=null; v0.pause(); v0.removeAttribute('src'); v0.load(); v0.style.display='none';
+  const f0=document.getElementById('pframe'); f0.src='about:blank'; f0.style.display='none';
+  setLoading(true,'Checking debrid for a clean HD stream…');
+  setHint('');
   document.getElementById('player').classList.add('open');
+  resolveDebrid(it,kind,s,e).then(res=>{
+    // Ignore a resolve that finished after the user moved to a different title/episode.
+    if(!pCtx || pCtx.it.id!==it.id || pCtx.s!==s || pCtx.e!==e) return;
+    pDebrid=res.streams; buildSources();
+    if(pDebrid.length){ selectSource('rd:0'); }
+    else { selectSource(PROVIDERS[0][0]); setHint(debridWhy(res.reason)); }  // transparent about why
+  });
 }
+async function resolveDebrid(it,kind,s,e){
+  const key=getRdKey(); if(!key) return {streams:[],reason:'no-key'};   // BYO: no key → skip the round-trip
+  // Bounded so a slow/hung torrentio can't stall playback — times out → embed.
+  try{ const r=await fetch(\`/api/debrid?tmdb=\${it.id}&kind=\${kind}&s=\${s}&e=\${e}\`, { headers:{'x-rd-key':key}, signal: AbortSignal.timeout(6000) });
+    if(!r.ok) return {streams:[],reason:'error'}; const j=await r.json(); return {streams:j.streams||[], reason:j.reason||''}; }
+  catch{ return {streams:[],reason:'timeout'}; }
+}
+// Never leave debrid invisible — say why it fell back to embed (and how to fix it).
+function debridWhy(reason){
+  if(reason==='no-key') return '⚡ Debrid is off — <b onclick="openSettings()" style="cursor:pointer;text-decoration:underline">add your Real-Debrid key</b> to unlock clean HD. Using an embed source for now.';
+  if(reason==='bad-key') return 'Your saved Real-Debrid key looks malformed — <b onclick="openSettings()" style="cursor:pointer;text-decoration:underline">re-enter it</b>. Using an embed source.';
+  if(reason==='no-imdb') return 'Debrid couldn\\'t match this title — using an embed source.';
+  if(reason&&reason.indexOf('torrentio')===0) return 'Debrid source is unreachable right now — using an embed source.';
+  return 'No browser-playable debrid file for this title (4K remux / mkv can\\'t play in a browser) — using an embed source. A browser ad blocker makes it ad-free.';
+}
+function buildSources(){ const sel=document.getElementById('psel');
+  const rd=pDebrid.map((st,i)=>\`<option value="rd:\${i}">Debrid · \${esc(st.label)}</option>\`).join('');
+  const em=PROVIDERS.map(([id,name])=>\`<option value="\${id}">\${name} (embed)</option>\`).join('');
+  sel.innerHTML=rd+em; }
+function selectSource(val){ if(!pCtx) return;
+  const sel=document.getElementById('psel'); sel.value=val;
+  const vid=document.getElementById('pvideo'), fr=document.getElementById('pframe');
+  setLoading(false);
+  if(val.startsWith('rd:')){ const st=pDebrid[+val.slice(3)]; if(!st) return;
+    fr.style.display='none'; fr.src='about:blank';
+    setBadge(true);
+    vid.onerror=()=>onVideoError(val);
+    // Resume where you left off (skip if we're basically at the start or the very end).
+    vid.onloadedmetadata=()=>{ if(resumeAt>30 && resumeAt < (vid.duration||1e9)-60){ try{ vid.currentTime=resumeAt; }catch(_){} } };
+    vid.style.display=''; vid.src=st.url; vid.play().catch(()=>{});
+    setHint('<b>Debrid HD</b> — direct stream from your Real-Debrid account, no ads. If it won\\'t play, pick another source.');
+  } else {
+    setBadge(false);
+    vid.onerror=null; vid.onloadedmetadata=null; vid.pause(); vid.removeAttribute('src'); vid.load(); vid.style.display='none';
+    fr.style.display=''; loadFrame(val);
+    setHint('Ads come from the embed source — a browser ad blocker (uBlock Origin) makes it ad-free.');
+  }
+}
+function setBadge(on){ document.getElementById('pbadge').style.display=on?'':'none'; }
+function showUpNext(html){ const u=document.getElementById('pupnext'); u.innerHTML=html; u.classList.add('on'); }
+function hideUpNext(){ document.getElementById('pupnext').classList.remove('on'); }
+// Autoplay the next episode when a debrid video ends (TV only; checks the season really has one).
+async function autoNext(){ if(!pCtx || pCtx.kind!=='tv') return;
+  const it=pCtx.it, s=pCtx.s, e=pCtx.e;
+  const sn=await api('tv/'+it.id+'/season/'+s);
+  const max=(sn&&sn.episodes||[]).reduce((m,x)=>Math.max(m,x.episode_number),0);
+  if(e<max && pCtx && pCtx.it.id===it.id){ showUpNext('▶ <b>Up Next</b> · S'+s+' E'+(e+1)); play(it,'tv',s,e+1); }
+}
+// A dead/unsupported debrid link → try the next quality, then fall to embeds.
+function onVideoError(val){ const i=+val.slice(3);
+  if(pDebrid[i+1]) selectSource('rd:'+(i+1)); else selectSource(PROVIDERS[0][0]); }
 function loadFrame(pid){ const p=PROVIDERS.find(x=>x[0]===pid); if(!p||!pCtx) return;
   document.getElementById('pframe').src=p[2](pCtx.it.id,pCtx.kind,pCtx.s,pCtx.e); }
-function switchProvider(){ loadFrame(document.getElementById('psel').value); }
-function closePlayer(){ document.getElementById('player').classList.remove('open');
-  document.getElementById('pframe').src='about:blank'; }
+function switchProvider(){ selectSource(document.getElementById('psel').value); }
+function setLoading(on,msg){ const l=document.getElementById('ploading');
+  if(msg) l.textContent=msg; l.classList.toggle('on',!!on); }
+function setHint(html){ document.getElementById('phint').innerHTML=html; }
+function closePlayer(){ const vid=document.getElementById('pvideo');
+  if(pCtx && vid.currentTime>0) saveProgress(vid.currentTime, vid.duration);  // remember where you stopped
+  if(hls){ hls.destroy(); hls=null; }   // tear down the live HLS engine
+  document.getElementById('player').classList.remove('open');
+  vid.onerror=null; vid.onloadedmetadata=null; vid.onloadeddata=null; vid.pause(); vid.removeAttribute('src'); vid.load();
+  document.getElementById('pframe').src='about:blank'; setBadge(false); hideUpNext(); pCtx=null; pDebrid=[]; }
+
+// Wire the debrid <video> once: throttled progress saves + autoplay-next at end.
+(function(){ const v=document.getElementById('pvideo'); if(!v) return;
+  v.addEventListener('timeupdate', ()=>{ if(progTick) return; progTick=setTimeout(()=>{ progTick=null; saveProgress(v.currentTime, v.duration); }, 5000); });
+  v.addEventListener('ended', ()=> autoNext());
+})();
+
+// ── Live TV + Sports (DaddyLive, proxied through the worker → the extractor) ──
+let liveChans=null, hls=null;
+const SPORTS_KW=['sport','espn','fs1','fs2','tnt','bein','dazn','nba','nfl','mlb','nhl','ufc','boxing','wwe','f1','formula','motogp','nascar','tennis','golf','cricket','willow','rugby','soccer','laliga','la liga','premier','uefa','eurosport','tsn','sportsnet','supersport','viaplay'];
+function hasWordJS(hay,needle){ let i=0; while((i=hay.indexOf(needle,i))>=0){ if(i===0||!/[a-z]/.test(hay[i-1])) return true; i+=needle.length; } return false; }
+function isSportsCh(name){ const n=name.toLowerCase(); return SPORTS_KW.some(k=>hasWordJS(n,k)); }
+async function viewLive(){
+  const main=document.getElementById('main');
+  main.innerHTML='<div class="empty">Loading live channels…</div>';
+  if(!liveChans){ try{ const r=await fetch('/api/live/channels'); const j=await r.json(); liveChans=j.channels||[]; }catch{ liveChans=[]; } }
+  const sports=(liveChans||[]).filter(x=>isSportsCh(x.name)).sort((a,b)=>a.name.localeCompare(b.name));
+  if(!sports.length){ main.innerHTML='<div class="empty">No live channels right now.<br><br>The site\\'s <b>SLIME_TOKEN</b> / <b>EXTRACTOR_BASE</b> secrets may be unset, or the server is offline.</div>'; return; }
+  const cards=sports.map(ch=>\`<div class="card" onclick="playLive('\${ch.id}')"><div style="height:112px;border-radius:12px;background:linear-gradient(135deg,#1f6feb,#0a0f1c);display:flex;align-items:center;justify-content:center;text-align:center;padding:8px;font-weight:800;font-size:13px;color:#fff;line-height:1.2">\${esc(ch.name)}</div><div class="t"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#e5484d;margin-right:5px"></span>LIVE</div></div>\`).join('');
+  main.innerHTML=\`<div class="row"><h2>Live Sports · \${sports.length} channels</h2></div><div class="grid">\${cards}</div>\`;
+}
+async function playLive(id){
+  const ch=(liveChans||[]).find(x=>x.id===id); const name=ch?ch.name:'Live';
+  document.getElementById('ptitle').textContent=name;
+  hideUpNext(); setHint(''); setBadge(false); pCtx=null;
+  document.getElementById('psel').innerHTML='<option>Live</option>';
+  const f0=document.getElementById('pframe'); f0.src='about:blank'; f0.style.display='none';
+  const v=document.getElementById('pvideo'); v.style.display='';
+  document.getElementById('player').classList.add('open');
+  setLoading(true,'Connecting to '+name+'…');
+  try{ const r=await fetch('/api/live/resolve?id='+encodeURIComponent(id)); const j=await r.json();
+    if(!j.play) throw 0; playHls(v,j.play); }
+  catch{ setLoading(false); setHint('Couldn\\'t start that channel — try another.'); }
+}
+function playHls(v,url){
+  if(hls){ hls.destroy(); hls=null; }
+  v.onloadeddata=()=>setLoading(false);
+  if(v.canPlayType('application/vnd.apple.mpegurl')){ v.src=url; v.play().catch(()=>{}); return; }
+  if(window.Hls && Hls.isSupported()){
+    hls=new Hls(); hls.loadSource(url); hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{ setLoading(false); v.play().catch(()=>{}); });
+    hls.on(Hls.Events.ERROR,(_,d)=>{ if(d.fatal){ setLoading(false); setHint('Stream error — try another channel.'); } });
+  } else { v.src=url; v.play().catch(()=>{}); }
+}
 
 // ── Router ──
 function go(hash){ location.hash=hash; }
 function route(){ const h=location.hash.slice(1)||'home';
   closeDetail();
   const base=h.split('/')[0];
-  renderNav(['home','movies','tv','anime','list'].includes(base)?base:'home');
+  renderNav(['home','movies','tv','live','anime','list'].includes(base)?base:'home');
   if(base==='home') viewHome();
+  else if(base==='live') viewLive();
   else if(base==='movies') viewList('movie','Movies',[
     {path:'movie/popular',label:'Popular'},{path:'movie/top_rated',label:'Top Rated'},
     {path:'movie/now_playing',label:'Now Playing'},{path:'movie/upcoming',label:'Upcoming'}]);
@@ -358,7 +537,7 @@ let sTimer=null;
 document.getElementById('q').addEventListener('input', e=>{ clearTimeout(sTimer); const q=e.target.value.trim();
   sTimer=setTimeout(()=>{ renderNav(''); viewSearch(q); }, 300); });
 
-document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closePlayer(); closeDetail(); } });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closePlayer(); closeDetail(); closeSettings(); } });
 
 route();
 </script>
