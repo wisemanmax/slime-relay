@@ -2,12 +2,13 @@
   "name": "slime-relay-worker",
   "version": "1.0.0",
   "private": true,
-  "description": "SlimeRelay — Cloudflare Worker registry + dashboard for extractor servers.",
+  "description": "SlimeRelay \u2014 Cloudflare Worker registry + dashboard for extractor servers.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "kv:create": "wrangler kv namespace create SERVERS",
-    "secret": "wrangler secret put RELAY_TOKEN"
+    "secret": "wrangler secret put RELAY_TOKEN",
+    "test": "node --check src/worker.js"
   },
   "devDependencies": {
     "wrangler": "^3.90.0"

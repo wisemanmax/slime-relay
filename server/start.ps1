@@ -14,6 +14,16 @@ if (-not (Test-Path .env)) {
   if ($LASTEXITCODE -ne 0) { Read-Host "Press Enter to close"; exit 1 }
 }
 
+if (Test-Path .env) {
+  Write-Host "Checking everything is ready..."
+  node doctor.js
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Fix the items above, then re-run."
+    Read-Host "Press Enter to close"
+    exit 1
+  }
+}
+
 node server.js
 # Keep the window open so a double-click user can read any error before it closes.
 Write-Host ""

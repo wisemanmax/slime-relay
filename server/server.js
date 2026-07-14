@@ -6,6 +6,7 @@
 const http = require('http');
 const https = require('https');
 const { chromium } = require('playwright');
+const batcave = require('./batcave');
 
 // -- Foolproof startup -- load .env no matter how we were launched (npm start,
 // bare `node server.js`, or a double-click), then fail loud & clear on the
@@ -33,11 +34,71 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 // Appended to URLs the server hands back so AVPlayer's follow-up requests
 // (segments, ranges) stay authorized.
 const KEY_Q = TOKEN ? `key=${TOKEN}` : '';
+// Provider hosts the headless browser is allowed to navigate to on /resolve.
+// Env-overridable because providers rotate domains; base domains match their
+// subdomains too.
+const EMBED_HOSTS = (process.env.SLIME_EMBED_HOSTS ||
+  'vidlink.pro,vidfast.pro,vidsrc.cc,embed.su,autoembed.cc,pstream.org,vidsrc.to,vidsrcme.ru,vidsrc-embed.ru,vsrc.su,vidsrc.icu')
+  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+function embedHostAllowed(embed) {
+  let h; try { h = new URL(embed).hostname.toLowerCase(); } catch (e) { return false; }
+  return EMBED_HOSTS.some(base => h === base || h.endsWith('.' + base));
+}
+
+// Ad / tracker / pop-under networks. During /resolve the headless browser ABORTS
+// requests to these (faster + less CPU + no hostile ad code run), and the stream
+// capture refuses to grab an .m3u8/.mp4 whose host is one of them (VAST/VPAID ad
+// creatives are often HLS - without this guard an ad reel can be mistaken for the
+// feature). Env-overridable via SLIME_AD_HOSTS (comma-separated, appended).
+const AD_HOSTS = (
+  'doubleclick.net,googlesyndication.com,googleadservices.com,googletagservices.com,' +
+  'google-analytics.com,googletagmanager.com,adnxs.com,adsrvr.org,criteo.com,criteo.net,' +
+  'pubmatic.com,rubiconproject.com,openx.net,casalemedia.com,smartadserver.com,33across.com,' +
+  'yieldmo.com,sharethrough.com,amazon-adsystem.com,adform.net,adcash.com,bidvertiser.com,' +
+  'zedo.com,adroll.com,taboola.com,outbrain.com,mgid.com,revcontent.com,teads.tv,' +
+  'springserve.com,spotxchange.com,spotx.tv,tremorhub.com,undertone.com,moatads.com,' +
+  'scorecardresearch.com,quantserve.com,adsafeprotected.com,doubleverify.com,chartbeat.com,' +
+  'popads.net,popcash.net,propellerads.com,propellerclick.com,adsterra.com,exoclick.com,' +
+  'juicyads.com,trafficjunky.com,hilltopads.net,clickadu.com,onclickperformance.com,' +
+  'poweredby.jads.co,a-ads.com,adskeeper.com,mc.yandex.ru,onclickalgo.com,onclckstr.com,' +
+  'highperformanceformat.com,effectivegatecpm.com,displaycontentnetwork.com,' +
+  (process.env.SLIME_AD_HOSTS || '')
+).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+function isAdHost(h) {
+  if (!h) return false;
+  h = h.toLowerCase();
+  return AD_HOSTS.some(base => h === base || h.endsWith('.' + base));
+}
+function isAdUrl(u) {
+  let h = ''; try { h = new URL(u).hostname; } catch (e) { return false; }
+  return isAdHost(h);
+}
+
+// Measurement / tag-manager / verification beacons. These are ad-adjacent (and
+// still block the app-side webview via AdBlocker.swift), but during headless
+// extraction we must NOT abort them: some providers route player-init logic
+// through a GTM container or gate the stream token behind an analytics beacon,
+// so killing these can make an anti-bot check fail and starve the resolve. They
+// load during extraction (as before this change); only the aggressive ad/pop
+// networks are aborted. (SLIME_BLOCK_DECOR does not affect this.)
+const EXTRACTION_KEEP_HOSTS = new Set([
+  'google-analytics.com', 'googletagmanager.com', 'googletagservices.com',
+  'scorecardresearch.com', 'quantserve.com', 'chartbeat.com', 'moatads.com',
+  'doubleverify.com', 'adsafeprotected.com', 'mc.yandex.ru',
+]);
+function abortDuringExtraction(u) {
+  let h = ''; try { h = new URL(u).hostname.toLowerCase(); } catch (e) { return false; }
+  if (!isAdHost(h)) return false;
+  return ![...EXTRACTION_KEEP_HOSTS].some(base => h === base || h.endsWith('.' + base));
+}
 
 let browser, ctx;
 const sessions = new Map(); // id -> { stream, referer, type, lastAccess }
 let nextId = 1;
 const SESSION_CAP = 80;
+// Concurrency cap on /resolve: each resolve can launch a Chromium page.
+const RESOLVE_MAX_INFLIGHT = Number(process.env.SLIME_RESOLVE_MAX || 3);
+let resolveInflight = 0;
 
 /// Mark a session as recently used so LRU eviction keeps live playbacks.
 function touchSession(id) {
@@ -57,6 +118,69 @@ function evictIfNeeded() {
     if (t < oldest) { oldest = t; oldestId = id; }
   }
   if (oldestId != null) sessions.delete(oldestId);
+}
+
+/// SSRF guard: reject loopback / link-local / private targets so media proxies
+/// can never be pointed at the router, localhost, or cloud metadata.
+function isPrivateHost(hostname) {
+  const h = (hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '0.0.0.0' || h === '::' || h === '::1') return true;
+  // Apply IPv6 rules ONLY to strings that actually contain a colon; otherwise
+  // public hostnames like fc-cdn.example.com would be wrongly rejected.
+  if (h.includes(':')) {
+    if (h.startsWith('::ffff:')) {
+      const mm = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+      return mm ? isPrivateHost(mm[1]) : true;
+    }
+    // Link-local fe80::/10 (fe8x-febx) and Unique-Local fc00::/7 (fc.. / fd..).
+    return /^fe[89ab]/.test(h) || h.startsWith('fc') || h.startsWith('fd');
+  }
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const a = +m[1], b = +m[2];
+  return a === 10 || a === 127 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254);
+}
+
+// Host of a session's resolved stream URL ('' if unparseable).
+function streamHost(u) {
+  try { return new URL(u).hostname; } catch (e) { return ''; }
+}
+
+/// A /seg proxy target is allowed only if it is a public host we surfaced while
+/// rewriting this session's playlists, never an arbitrary caller-supplied URL.
+function allowedProxyTarget(s, u) {
+  let h; try { h = new URL(u).hostname; } catch (e) { return false; }
+  if (isPrivateHost(h)) return false;
+  return !!(s.hosts && s.hosts.has(h));
+}
+
+/// The base URL clients should call back for playlists/segments/subtitles.
+/// Prefer PUBLIC_BASE when set; otherwise reflect a valid Host that the client
+/// already used to reach us, falling back to the socket's local address.
+function publicBase(req) {
+  if (process.env.PUBLIC_BASE) return process.env.PUBLIC_BASE.replace(/\/+$/, '');
+  // Reflect the scheme/host the CLIENT reached us on so nested playlist/segment
+  // URLs stay same-origin. A Google Cast receiver (and any browser HLS player)
+  // blocks mixed HTTP media inside its HTTPS page, so getting the scheme right
+  // matters. Behind a Cloudflare Tunnel the origin hop is plain HTTP but the real
+  // client used HTTPS - trust X-Forwarded-Proto/-Host for that case; fall back to
+  // the direct socket for native LAN/Tailscale AVPlayer clients (still HTTP).
+  // Only trust X-Forwarded-* from the Cloudflare Tunnel, which connects to the
+  // local port from loopback - a direct LAN/public client (now reachable) could
+  // otherwise spoof these headers to poison the callback host.
+  const ra = req.socket.remoteAddress || '';
+  const viaTunnel = ra === '::1' || ra.startsWith('127.') || ra.startsWith('::ffff:127.');
+  const xfProto = viaTunnel ? (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() : '';
+  const scheme = xfProto || (req.socket.encrypted ? 'https' : 'http');
+  const fwdHost = viaTunnel ? req.headers['x-forwarded-host'] : undefined;
+  const raw = (fwdHost || req.headers.host || '').split(',')[0].trim();
+  if (/^(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(:\d+)?$/.test(raw)) return `${scheme}://${raw}`;
+  const local = (req.socket.localAddress || '').replace('::ffff:', '') || '127.0.0.1';
+  const port = scheme === 'https' ? (process.env.SLIME_TLS_PORT || 8788) : PORT;
+  return `${scheme}://${local}:${port}`;
 }
 
 async function ensureBrowser() {
@@ -96,6 +220,38 @@ async function ensureBrowser() {
     Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
     Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
   });
+  // Ad-block at the network layer: abort requests to ad/tracker/pop hosts. The
+  // stream is captured from the request URL (page.on('request') fires before this
+  // routing decision), and every request that mints the token - scripts, xhr/fetch,
+  // the media itself, documents - is always let through, so this only removes ad
+  // noise: faster resolves, less CPU, no hostile ad code run.
+  // Decorative image/font blocking is a further speedup but riskier - some anti-bot
+  // embeds gate token-minting behind a poster/beacon load - so it's OFF by default
+  // and opt-in via SLIME_BLOCK_DECOR=1 once verified against the live providers.
+  const blockDecor = process.env.SLIME_BLOCK_DECOR === '1';
+  const debugAbort = process.env.SLIME_DEBUG_ABORT === '1';
+  if (process.env.SLIME_NO_ADBLOCK !== '1') {   // kill-switch if a provider ever breaks
+    await ctx.route('**/*', (route) => {
+      try {
+        const req = route.request();
+        const u = req.url();
+        // Aggressive ad/pop networks first - abort even when the URL wears a media
+        // extension (VAST/VPAID ad reels are frequently .m3u8/.ts). Measurement/tag
+        // hosts are kept (see abortDuringExtraction) so provider bot-checks survive.
+        if (abortDuringExtraction(u)) {
+          if (debugAbort) { try { console.log('   [adblock] abort', new URL(u).hostname); } catch (_) {} }
+          return route.abort();
+        }
+        // Never touch the actual media/manifest/subtitle - those ARE the payload.
+        if (/\.(m3u8|mp4|ts|m4s|vtt|srt|key)([/?&#]|$)/i.test(u)) return route.continue();
+        if (blockDecor) {
+          const rt = req.resourceType();
+          if (rt === 'image' || rt === 'font') return route.abort();
+        }
+        return route.continue();
+      } catch (e) { try { return route.continue(); } catch (_) {} }
+    });
+  }
 }
 
 // Load the embed and capture the stream URL. Prefers HLS (.m3u8) - it carries
@@ -108,12 +264,32 @@ async function extract(embedUrl) {
   const captured = []; // subtitle files the provider's own player loads
   // Catch manifests on both request and response, and match tokened URLs that
   // carry .m3u8/.mp4 anywhere in the query (not just the path).
+  // A stream URL is safe to capture only if its host isn't private/loopback -
+  // a hostile embed can inject one to turn /hls or /mp4 into an SSRF proxy.
+  const publicStream = (u) => {
+    let h = ''; try { h = new URL(u).hostname; } catch (e) {}
+    // Reject private/loopback (SSRF) AND known ad hosts - VAST/VPAID ad reels
+    // are frequently HLS, so without the ad-host check an ad can be captured
+    // as the feature stream.
+    return h && !isPrivateHost(h) && !isAdHost(h);
+  };
   const seen = (u) => {
-    if (!m3u8 && /\.m3u8([/?&#]|$)/i.test(u)) m3u8 = u;
-    if (!mp4 && /\.mp4([/?&#]|$)/i.test(u)) mp4 = u;
+    // DEBUG: surface a media URL that was seen but rejected by publicStream, so
+    // an over-broad ad-host/SSRF guard eating a real stream is visible in the log.
+    if (process.env.SLIME_DEBUG_ABORT === '1' && /\.(m3u8|mp4)([/?&#]|$)/i.test(u) && !publicStream(u)) {
+      let dh = ''; try { dh = new URL(u).hostname; } catch (e) {}
+      console.log(`   [capture] REJECTED media host=${dh} ad=${isAdHost(dh)} priv=${isPrivateHost(dh)}`);
+    }
+    if (!m3u8 && /\.m3u8([/?&#]|$)/i.test(u) && publicStream(u)) m3u8 = u;
+    if (!mp4 && /\.mp4([/?&#]|$)/i.test(u) && publicStream(u)) mp4 = u;
     if ((/\.vtt([/?&#]|$)/i.test(u) || /\.srt([/?&#]|$)/i.test(u)) && !captured.some(s => s.url === u)) {
-      const lang = subLangFromUrl(u);
-      captured.push({ lang, name: subName(lang), url: u });
+      // Don't capture a subtitle pointing at a private/loopback host - a hostile
+      // embed page can inject one to turn /vtt into an SSRF proxy.
+      let subHost = ''; try { subHost = new URL(u).hostname; } catch (e) {}
+      if (subHost && !isPrivateHost(subHost)) {
+        const lang = subLangFromUrl(u);
+        captured.push({ lang, name: subName(lang), url: u });
+      }
     }
   };
   page.on('response', (r) => seen(r.url()));
@@ -148,7 +324,7 @@ async function extract(embedUrl) {
       await page.waitForTimeout(1000);
     }
   } catch (e) {}
-  await page.close();
+  await page.close().catch(() => {});
   const hit = m3u8 || mp4;
   if (!hit) return null;
   const referer = new URL(embedUrl).origin + '/';
@@ -156,18 +332,24 @@ async function extract(embedUrl) {
 }
 
 // Fetch a text body over node http(s), following redirects (best-effort).
-function nodeGetText(u, depth = 0) {
+function nodeGetText(u, depth = 0, timeoutMs = 15000) {
   return new Promise((resolve) => {
     let mod; try { mod = new URL(u).protocol === 'http:' ? http : https; } catch (e) { return resolve(null); }
-    mod.get(u, { headers: { 'user-agent': UA } }, (r) => {
+    const rq = mod.get(u, { headers: { 'user-agent': UA } }, (r) => {
       if ([301, 302, 303, 307, 308].includes(r.statusCode) && r.headers.location && depth < 4) {
-        r.resume(); return nodeGetText(new URL(r.headers.location, u).href, depth + 1).then(resolve);
+        r.resume();
+        const next = new URL(r.headers.location, u).href;
+        // A public subtitle URL must not redirect us into the LAN/loopback.
+        try { if (isPrivateHost(new URL(next).hostname)) return resolve(null); } catch (e) { return resolve(null); }
+        return nodeGetText(next, depth + 1, timeoutMs).then(resolve);
       }
       if (r.statusCode !== 200) { r.resume(); return resolve(null); }
       let d = ''; r.setEncoding('utf8');
       r.on('data', (c) => d += c);
       r.on('end', () => resolve(d));
-    }).on('error', () => resolve(null));
+    });
+    rq.on('error', () => resolve(null));
+    rq.setTimeout(timeoutMs, () => { rq.destroy(); resolve(null); });
   });
 }
 
@@ -224,7 +406,7 @@ async function fetchSubtitles(params) {
   let u = `https://sub.wyzie.io/search?id=${encodeURIComponent(tmdb)}&format=srt`;
   if (SUBS_KEY) u += `&key=${encodeURIComponent(SUBS_KEY)}`;
   if (kind !== 'movie' && season && episode) u += `&season=${season}&episode=${episode}`;
-  const list = await nodeGetJSON(u);
+  const list = await nodeGetJSON(u, 8000);
   if (!Array.isArray(list)) return [];
   const out = [], seen = new Set();
   for (const s of list) {
@@ -238,6 +420,96 @@ async function fetchSubtitles(params) {
   // English first for a sensible default.
   out.sort((a, b) => (a.lang.startsWith('en') ? -1 : 0) - (b.lang.startsWith('en') ? -1 : 0));
   return out;
+}
+
+// --- DaddyLive (dlhd) live-sports resolver ----------------------------------
+// streamed.st's stream tokens are single-use -> un-proxyable. DaddyLive uses
+// time-window expiry tokens that survive re-fetch, so our sniff->proxy model
+// works. Resolve flow (pure HTTP, no headless browser needed):
+//   stream-{id}.php -> <iframe src> -> the iframe page's Clappr source is
+//   base64 inside atob('...') -> decode -> master m3u8. Playback Referer MUST be
+//   the IFRAME host (not dlhd). Domains rotate -> try a mirror list; override
+//   with SLIME_DADDY_HOSTS (comma-separated).
+const DADDY_HOSTS = (process.env.SLIME_DADDY_HOSTS ||
+  'dlhd.st,dlhd.click,daddylive.dad,thedaddy.to,dlhd.dad')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
+// GET text with an explicit Referer (dlhd pages 403 without it), following
+// redirects across the mirror rotation.
+function daddyGet(u, referer, depth = 0, timeoutMs = 12000) {
+  return new Promise((resolve) => {
+    let mod; try { mod = new URL(u).protocol === 'http:' ? http : https; } catch (e) { return resolve(null); }
+    const headers = { 'user-agent': UA };
+    if (referer) headers['referer'] = referer;
+    const rq = mod.get(u, { headers }, (r) => {
+      if ([301, 302, 303, 307, 308].includes(r.statusCode) && r.headers.location && depth < 4) {
+        r.resume();
+        const next = new URL(r.headers.location, u).href;
+        try { if (isPrivateHost(new URL(next).hostname)) return resolve(null); } catch (e) { return resolve(null); }
+        return daddyGet(next, referer, depth + 1, timeoutMs).then(resolve);
+      }
+      if (r.statusCode !== 200) { r.resume(); return resolve(null); }
+      let d = ''; r.setEncoding('utf8');
+      r.on('data', (c) => d += c);
+      r.on('end', () => resolve(d));
+    });
+    rq.on('error', () => resolve(null));
+    rq.setTimeout(timeoutMs, () => { rq.destroy(); resolve(null); });
+  });
+}
+
+// Resolve a DaddyLive channel id -> { stream (master m3u8), referer, type }.
+async function resolveDaddy(id) {
+  const cid = String(id || '').replace(/[^0-9]/g, '');
+  if (!cid) return null;
+  for (const host of DADDY_HOSTS) {
+    const origin = `https://${host}`;
+    const page = await daddyGet(`${origin}/stream/stream-${cid}.php`, `${origin}/`);
+    if (!page) continue;
+    const im = page.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+    if (!im) continue;
+    let iframe; try { iframe = new URL(im[1], origin).href; } catch (e) { continue; }
+    // SSRF guard: the iframe src is scraped from untrusted (rotating, third-party)
+    // DaddyLive HTML and the server is now internet-reachable via the tunnel -
+    // never let a hijacked mirror point us at loopback/LAN/link-local.
+    try { if (isPrivateHost(new URL(iframe).hostname)) continue; } catch (e) { continue; }
+    const iframeOrigin = new URL(iframe).origin;
+    const inner = await daddyGet(iframe, `${origin}/`);
+    if (!inner) continue;
+    // Clappr source lives base64-encoded inside window.atob('...') in the raw HTML.
+    let m3u8 = null;
+    const bm = inner.match(/atob\(["']([A-Za-z0-9+/=]+)["']\)/);
+    if (bm) { try { m3u8 = Buffer.from(bm[1], 'base64').toString('utf8').trim(); } catch (e) {} }
+    if (!m3u8 || !/^https?:\/\//i.test(m3u8)) {
+      const dm = inner.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/i);   // fallback: bare m3u8
+      m3u8 = dm ? dm[0] : null;
+    }
+    if (!m3u8 || !/^https?:\/\//i.test(m3u8)) continue;
+    // Same SSRF guard on the resolved stream host before it becomes a proxied session.
+    try { if (isPrivateHost(new URL(m3u8).hostname)) continue; } catch (e) { continue; }
+    return { stream: m3u8, referer: `${iframeOrigin}/`, type: 'hls', subs: [] };
+  }
+  return null;
+}
+
+// Scrape the DaddyLive 24/7 channel list -> [{ id, name }] (~900 channels).
+// Cached briefly; the list is large and changes slowly.
+let daddyChanCache = null;
+async function daddyChannels() {
+  if (daddyChanCache && Date.now() - daddyChanCache.at < 30 * 60 * 1000) return daddyChanCache.list;
+  for (const host of DADDY_HOSTS) {
+    const html = await daddyGet(`https://${host}/24-7-channels.php`, `https://${host}/`, 0, 15000);
+    if (!html) continue;
+    const out = [];
+    const re = /watch\.php\?id=(\d+)"[^>]*>\s*<div class="card__title">([^<]{1,80})<\/div>/g;
+    let m;
+    while ((m = re.exec(html))) {
+      const name = m[2].replace(/&amp;/g, '&').replace(/&#0?39;/g, "'").trim();
+      out.push({ id: m[1], name });
+    }
+    if (out.length) { daddyChanCache = { at: Date.now(), list: out }; return out; }
+  }
+  return daddyChanCache ? daddyChanCache.list : [];
 }
 
 // -- Strategy #2: direct JSON resolver (no headless browser) -----------------
@@ -366,6 +638,9 @@ function streamProxy(streamUrl, referer, req, res, defaultType = 'video/mp4', de
       if ([301, 302, 303, 307, 308].includes(up.statusCode) && up.headers.location && depth < 5) {
         up.resume();
         const next = new URL(up.headers.location, streamUrl).href;
+        // Re-check each redirect hop: a public CDN URL must not bounce us into
+        // the LAN / loopback.
+        try { if (isPrivateHost(new URL(next).hostname)) return done(false); } catch (e) { return done(false); }
         return streamProxy(next, referer, req, res, defaultType, depth + 1, patch).then(done);
       }
       // Blocked -> let the caller fall back to the browser proxy (no headers written).
@@ -374,7 +649,11 @@ function streamProxy(streamUrl, referer, req, res, defaultType = 'video/mp4', de
       for (const k of ['content-type', 'content-length', 'content-range']) {
         if (up.headers[k]) h[k] = up.headers[k];
       }
-      if (!h['content-type']) h['content-type'] = defaultType;
+      // Some CDNs disguise HLS segments as images (DaddyLive's R2 serves .ts as
+      // image/png). AVPlayer on-device ignores the wrong type, but an AirPlay
+      // receiver drops the video track and plays audio only - so relabel a
+      // mislabeled/missing segment type with the caller's expected media type.
+      if (!h['content-type'] || /^image\//i.test(h['content-type'])) h['content-type'] = defaultType;
       console.log(`   -> CDN ${up.statusCode}  ${h['content-range'] || h['content-length'] || ''}`);
       res.writeHead(up.statusCode, h);
       if (patch && patch.length) {
@@ -513,6 +792,13 @@ function pick1080(variants) {
 const server = http.createServer(async (req, res) => {
   const t0 = Date.now();
   const client = (req.socket.remoteAddress || '?').replace('::ffff:', '');
+  // CORS: a Google Cast receiver fetches playlists/segments from the browser and
+  // is blocked without these. Harmless for the native AVPlayer clients. Simple
+  // media GETs don't preflight, but answer OPTIONS anyway for safety.
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Authorization, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     if (url.pathname === '/health') { res.writeHead(200); return res.end('ok'); }
@@ -522,6 +808,14 @@ const server = http.createServer(async (req, res) => {
     }
     // Minimal logging - path + client only, no titles/URLs on disk.
     console.log(`${new Date().toLocaleTimeString()}  ${req.method} ${url.pathname}  <- ${client}`);
+
+    // Live-sports catalog: DaddyLive's 24/7 channel list (id + name). The client
+    // filters/categorises; each id plays via /resolve?source=daddy&id=<id>.
+    if (url.pathname === '/daddy/channels') {
+      const list = await daddyChannels();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ channels: list }));
+    }
 
     // Anime id mapping: TMDB -> AniList/MAL + per-cour episode (for anime sources
     // + dub/sub). Fast, no headless browser. Returns {} when the title isn't anime.
@@ -535,42 +829,110 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify(ids || {}));
     }
 
+    // --- Comics (batcave.biz via the shared headless browser) ---
+    // search/browse/detail/pages return JSON; /comic/img proxies a cover/page
+    // image with the batcave Referer through a real page nav. Host-locked to
+    // batcave so it cannot become an arbitrary image proxy.
+    if (url.pathname.startsWith('/comic/')) {
+      const p = url.searchParams;
+      if (url.pathname === '/comic/img') {
+        const u = p.get('u') || '';
+        let iu;
+        try { iu = new URL(u); } catch (e) { res.writeHead(400); return res.end('bad url'); }
+        if (iu.hostname !== 'batcave.biz' && iu.hostname !== 'img.batcave.biz') { res.writeHead(400); return res.end('host not allowed'); }
+        // img.batcave.biz TLS-fingerprints non-browser clients; only a real
+        // page navigation passes. It also hotlink-gates on the reader Referer.
+        let referer = 'https://batcave.biz/';
+        const mm = iu.pathname.match(/^\/img\/[^/]+\/(\d+)\/(\d+)\//);
+        if (mm) referer = `https://batcave.biz/reader/${mm[1]}/${mm[2]}`;
+        let ipage;
+        try {
+          await ensureBrowser();
+          ipage = await ctx.newPage();
+          const r = await ipage.goto(u, { referer, timeout: 20000 });
+          const ct = (r && r.headers()['content-type']) || '';
+          if (!r || r.status() !== 200 || !/^image\//i.test(ct)) { res.writeHead(502); return res.end('image blocked'); }
+          const buf = await r.body();
+          res.writeHead(200, { 'content-type': ct, 'cache-control': 'public, max-age=86400' });
+          return res.end(buf);
+        } catch (e) { if (!res.headersSent) res.writeHead(502); return res.end('image error'); }
+        finally { if (ipage) await ipage.close().catch(() => {}); }
+      }
+      const np = { newPage: async () => { await ensureBrowser(); return ctx.newPage(); } };
+      const sendJson = (obj) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+      try {
+        if (url.pathname === '/comic/search') return sendJson(await batcave.search(p.get('q') || '', np));
+        if (url.pathname === '/comic/browse') return sendJson(await batcave.browse({ publisher: p.get('publisher') || undefined, page: p.get('page') }, np));
+        if (url.pathname === '/comic/detail') {
+          const slug = p.get('slug') || '';
+          if (!slug) { res.writeHead(400); return res.end('missing slug'); }
+          return sendJson(await batcave.detail(slug, np));
+        }
+        if (url.pathname === '/comic/pages') {
+          const comic = p.get('comic'), chapter = p.get('chapter');
+          if (!comic || !chapter) { res.writeHead(400); return res.end('missing comic/chapter'); }
+          return sendJson({ pages: await batcave.pages(comic, chapter, np) });
+        }
+      } catch (e) { if (!res.headersSent) res.writeHead(502); return res.end('comic error'); }
+      res.writeHead(404); return res.end('no such comic route');
+    }
+
     // Resolve an embed URL to a local proxy URL.
     if (url.pathname === '/resolve') {
       const p = url.searchParams;
       const source = p.get('source') || 'embed';
-      let info = null;
-      if (source === 'ia') {
-        // Strategy #3 - Internet Archive (legal fallback).
-        info = await resolveArchive(p.get('title'), p.get('year'));
-        console.log(`   resolve[ia]: ${info ? 'hit ' + info.archive : 'miss'} (${Date.now() - t0}ms)`);
-      } else if (source === 'rest') {
-        // Strategy #2 - direct JSON resolver (no browser).
-        info = await resolveDirect(p.get('tmdb'), p.get('kind'), p.get('season'), p.get('episode'));
-        console.log(`   resolve[rest]: ${info ? info.type : 'miss'} (${Date.now() - t0}ms)`);
-      } else {
-        // Strategy #1 - headless-browser embed extraction (default).
+      // Cheap validation before taking a concurrency slot.
+      if (source === 'embed') {
         const embed = p.get('embed');
         if (!embed) { res.writeHead(400); return res.end('missing embed'); }
-        info = await extract(embed);
+        if (!embedHostAllowed(embed)) { res.writeHead(400); return res.end('embed host not allowed'); }
       }
-      if (!info) {
-        console.log(`   resolve: no stream (${Date.now() - t0}ms)`);
-        res.writeHead(502); return res.end(JSON.stringify({ error: 'no stream found' }));
+      if (source === 'daddy' && !/^\d+$/.test(p.get('id') || '')) {
+        res.writeHead(400); return res.end('bad daddy id');
       }
-      // Subtitles = whatever the provider loaded (captured) + the index API
-      // (if a key is configured).
-      info.subs = [...(info.subs || []), ...await fetchSubtitles(url.searchParams)];
-      console.log(`   resolve: ${info.type}${info.subs.length ? ` +${info.subs.length} subs` : ''} (${Date.now() - t0}ms)`);
-      const id = String(nextId++);
-      info.lastAccess = Date.now();
-      sessions.set(id, info);
-      evictIfNeeded();
-      const base = `http://${req.headers.host}`;
-      const q = KEY_Q ? `?${KEY_Q}` : '';
-      const playUrl = info.type === 'hls' ? `${base}/hls/${id}.m3u8${q}` : `${base}/mp4/${id}${q}`;
-      res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ id, type: info.type, play: playUrl }));
+      if (resolveInflight >= RESOLVE_MAX_INFLIGHT) { res.writeHead(429); return res.end('busy'); }
+      resolveInflight++;
+      try {
+        let info = null;
+        if (source === 'ia') {
+          // Strategy #3 - Internet Archive (legal fallback).
+          info = await resolveArchive(p.get('title'), p.get('year'));
+          console.log(`   resolve[ia]: ${info ? 'hit ' + info.archive : 'miss'} (${Date.now() - t0}ms)`);
+        } else if (source === 'rest') {
+          // Strategy #2 - direct JSON resolver (no browser).
+          info = await resolveDirect(p.get('tmdb'), p.get('kind'), p.get('season'), p.get('episode'));
+          console.log(`   resolve[rest]: ${info ? info.type : 'miss'} (${Date.now() - t0}ms)`);
+        } else if (source === 'daddy') {
+          // Live sports - DaddyLive channel id -> time-window m3u8 (no browser).
+          info = await resolveDaddy(p.get('id'));
+          console.log(`   resolve[daddy]: ${info ? 'hit' : 'miss'} id=${p.get('id')} (${Date.now() - t0}ms)`);
+        } else {
+          // Strategy #1 - headless-browser embed extraction (default).
+          info = await extract(p.get('embed'));
+        }
+        if (!info) {
+          console.log(`   resolve: no stream (${Date.now() - t0}ms)`);
+          res.writeHead(502); return res.end(JSON.stringify({ error: 'no stream found' }));
+        }
+        // Subtitles = whatever the provider loaded (captured) + the index API.
+        info.subs = [...(info.subs || []), ...await fetchSubtitles(url.searchParams)];
+        console.log(`   resolve: ${info.type}${info.subs.length ? ` +${info.subs.length} subs` : ''} (${Date.now() - t0}ms)`);
+        const id = String(nextId++);
+        info.lastAccess = Date.now();
+        // Seed the per-session proxy allow-set with the resolved stream's host;
+        // it grows as we rewrite nested playlists.
+        info.hosts = new Set();
+        try { info.hosts.add(new URL(info.stream).hostname); } catch (e) {}
+        sessions.set(id, info);
+        evictIfNeeded();
+        const base = publicBase(req);
+        const q = KEY_Q ? `?${KEY_Q}` : '';
+        const playUrl = info.type === 'hls' ? `${base}/hls/${id}.m3u8${q}` : `${base}/mp4/${id}${q}`;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ id, type: info.type, play: playUrl }));
+      } finally {
+        resolveInflight--;
+      }
     }
 
     // Progressive MP4 - stream the exact byte range AVPlayer asks for straight
@@ -579,6 +941,7 @@ const server = http.createServer(async (req, res) => {
     if (m) {
       const s = touchSession(m[1]);
       if (!s) { res.writeHead(404); return res.end('gone'); }
+      if (isPrivateHost(streamHost(s.stream))) { res.writeHead(502); return res.end('blocked'); }
       console.log(`   mp4 range=${req.headers.range || '-'}  (streaming)`);
       await ensureHevcPatch(s); // hev1->hvc1 rename offsets (black-video fix)
       const ok = await streamProxy(s.stream, s.referer, req, res, 'video/mp4', 0, s.hevcPatch);
@@ -597,7 +960,8 @@ const server = http.createServer(async (req, res) => {
       const id = m[1];
       const s = touchSession(id);
       if (!s) { res.writeHead(404); return res.end('gone'); }
-      const host = req.headers.host;
+      if (isPrivateHost(streamHost(s.stream))) { res.writeHead(502); return res.end('blocked'); }
+      const pub = publicBase(req);
       const amp = KEY_Q ? `&${KEY_Q}` : '';
       const kq = KEY_Q ? `?${KEY_Q}` : '';
       const r = await proxyFetch(s.stream, s.referer);
@@ -606,9 +970,13 @@ const server = http.createServer(async (req, res) => {
       const isMaster = /#EXT-X-STREAM-INF/i.test(src);
       const subs = s.subs || [];
       const subLines = subs.map((sub, i) =>
-        `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="${sub.name.replace(/"/g, '')}",LANGUAGE="${sub.lang}",DEFAULT=${i === 0 ? 'YES' : 'NO'},AUTOSELECT=YES,FORCED=NO,URI="http://${host}/subs/${id}/${i}.m3u8${kq}"`);
+        `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="${sub.name.replace(/"/g, '')}",LANGUAGE="${sub.lang}",DEFAULT=${i === 0 ? 'YES' : 'NO'},AUTOSELECT=YES,FORCED=NO,URI="${pub}/subs/${id}/${i}.m3u8${kq}"`);
 
-      const proxySeg = u => `http://${host}/seg/${id}?u=${encodeURIComponent(new URL(u, base).href)}${amp}`;
+      const proxySeg = u => {
+        const abs = new URL(u, base).href;
+        try { s.hosts.add(new URL(abs).hostname); } catch (e) {}
+        return `${pub}/seg/${id}?u=${encodeURIComponent(abs)}${amp}`;
+      };
       // Pin to ~1080p by default (Apple TV); a client can pass q=auto to get
       // the full adaptive ladder back.
       const forceQuality = url.searchParams.get('q') !== 'auto';
@@ -682,7 +1050,7 @@ const server = http.createServer(async (req, res) => {
         // Media playlist -> wrap in a master so subtitles can attach.
         out = ['#EXTM3U', ...subLines,
           `#EXT-X-STREAM-INF:BANDWIDTH=3000000${subs.length ? ',SUBTITLES="subs"' : ''}`,
-          `http://${host}/seg/${id}?u=${encodeURIComponent(s.stream)}${amp}`].join('\n');
+          `${pub}/seg/${id}?u=${encodeURIComponent(s.stream)}${amp}`].join('\n');
       }
       res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
       return res.end(out);
@@ -696,7 +1064,7 @@ const server = http.createServer(async (req, res) => {
       const kq = KEY_Q ? `?${KEY_Q}` : '';
       const pl = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:36000',
         '#EXT-X-PLAYLIST-TYPE:VOD', '#EXTINF:36000.0,',
-        `http://${req.headers.host}/vtt/${m[1]}/${m[2]}${kq}`, '#EXT-X-ENDLIST'].join('\n');
+        `${publicBase(req)}/vtt/${m[1]}/${m[2]}${kq}`, '#EXT-X-ENDLIST'].join('\n');
       res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
       return res.end(pl);
     }
@@ -707,6 +1075,9 @@ const server = http.createServer(async (req, res) => {
       const s = sessions.get(m[1]);
       const sub = s && s.subs && s.subs[m[2]];
       if (!sub) { res.writeHead(404); return res.end('gone'); }
+      // Defense in depth: never fetch a private/loopback subtitle URL.
+      let subHost; try { subHost = new URL(sub.url).hostname; } catch (e) { subHost = ''; }
+      if (!subHost || isPrivateHost(subHost)) { res.writeHead(400); return res.end('bad sub url'); }
       let body = await nodeGetText(sub.url);
       if (!body) { res.writeHead(502); return res.end('sub fetch failed'); }
       // Normalize to WEBVTT (SRT uses comma decimals) and add the HLS timestamp
@@ -728,13 +1099,18 @@ const server = http.createServer(async (req, res) => {
       const s = touchSession(m[1]);
       const u = url.searchParams.get('u');
       if (!s || !u) { res.writeHead(404); return res.end('gone'); }
+      // SSRF gate: only proxy hosts we surfaced for this session, never a
+      // loopback/LAN address a caller injected via ?u=.
+      if (!allowedProxyTarget(s, u)) { res.writeHead(403); return res.end('blocked'); }
       // A nested playlist (variant/media .m3u8) must be fetched as text and
       // rewritten; a media segment is streamed straight through.
       if (!/\.m3u8($|\?)/i.test(u)) {
         const ok = await streamProxy(u, s.referer, req, res, 'video/mp2t');
         if (!ok && !res.headersSent) {
           const r = await proxyFetch(u, s.referer, req.headers.range);
-          const h = { 'content-type': r.headers['content-type'] || 'video/mp2t' };
+          let ct = r.headers['content-type'];
+          if (!ct || /^image\//i.test(ct)) ct = 'video/mp2t';   // un-disguise .ts (AirPlay video)
+          const h = { 'content-type': ct };
           if (r.headers['content-length']) h['content-length'] = r.headers['content-length'];
           res.writeHead(r.status, h);
           res.end(r.body);
@@ -744,18 +1120,56 @@ const server = http.createServer(async (req, res) => {
       const r = await proxyFetch(u, s.referer);
       const base = new URL(u);
       const amp = KEY_Q ? `&${KEY_Q}` : '';
-      const text = r.body.toString('utf8').split('\n').map(line => {
+      // Rewrite each entry through us, recording its host as an allowed target
+      // so the follow-up /seg fetch for it passes the SSRF gate.
+      const seg = x => {
+        const abs = new URL(x, base).href;
+        try { s.hosts.add(new URL(abs).hostname); } catch (e) {}
+        return `${publicBase(req)}/seg/${m[1]}?u=${encodeURIComponent(abs)}${amp}`;
+      };
+      const rewriteLine = (line) => {
         const t = line.trim();
-        if (!t || t.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_, x) => `URI="http://${req.headers.host}/seg/${m[1]}?u=${encodeURIComponent(new URL(x, base).href)}${amp}"`);
-        return `http://${req.headers.host}/seg/${m[1]}?u=${encodeURIComponent(new URL(t, base).href)}${amp}`;
-      }).join('\n');
+        if (!t || t.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_, x) => `URI="${seg(x)}"`);
+        return seg(t);
+      };
+      const raw = r.body.toString('utf8');
+      // Strip in-manifest ad pods - but ONLY on VOD playlists (they carry
+      // #EXT-X-ENDLIST). A live sliding-window playlist must never have segments
+      // removed: an ad break spans refreshes, so a #EXT-X-CUE-OUT may have no
+      // #EXT-X-CUE-IN in this window yet (dropping the tail would starve the live
+      // edge), and removing mid-list segments desyncs #EXT-X-MEDIA-SEQUENCE.
+      // Live (sports/TV) passes through unchanged; only VOD is filtered.
+      let out;
+      if (!/#EXT-X-ENDLIST/i.test(raw)) {
+        out = raw.split('\n').map(rewriteLine).join('\n');
+      } else {
+        // VOD: drop everything an SCTE-35 marker explicitly brackets (between
+        // #EXT-X-CUE-OUT and #EXT-X-CUE-IN). A plain #EXT-X-DISCONTINUITY (also
+        // used for legit codec/resolution changes) is left alone. An unterminated
+        // CUE-OUT (no matching CUE-IN) does NOT drop the tail - the buffered span
+        // is flushed back, so a malformed marker never loses real content.
+        let inAd = false, adsCut = 0, pending = [];
+        const rewritten = [];
+        for (const line of raw.split('\n')) {
+          const t = line.trim();
+          if (/^#EXT-X-CUE-OUT(?![A-Z-])/i.test(t) || /^#EXT-X-CUE-OUT-CONT/i.test(t)) { inAd = true; pending = [line]; continue; }
+          if (/^#EXT-X-CUE-IN/i.test(t)) { inAd = false; pending = []; adsCut++; continue; }
+          if (inAd) { pending.push(line); continue; }
+          rewritten.push(rewriteLine(line));
+        }
+        if (pending.length) for (const line of pending) rewritten.push(rewriteLine(line)); // unterminated -> keep
+        if (adsCut) console.log(`   /seg: stripped ${adsCut} ad break(s) from VOD playlist`);
+        out = rewritten.join('\n');
+      }
       res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
-      return res.end(text);
+      return res.end(out);
     }
 
     res.writeHead(404); res.end('not found');
   } catch (e) {
-    res.writeHead(500); res.end('err: ' + e.message);
+    console.error('   500:', e && e.message);
+    if (!res.headersSent) { res.writeHead(500); res.end('internal error'); }
+    else { try { res.end(); } catch (_) {} }
   }
 });
 

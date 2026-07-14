@@ -1,0 +1,8 @@
+{
+  "name": "slime-relay",
+  "private": true,
+  "description": "Root gate for AgentDeck / CI — syntax-checks the Worker + the server extractor.",
+  "scripts": {
+    "test": "node --check relay/src/worker.js && npm --prefix server test"
+  }
+}

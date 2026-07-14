@@ -23,16 +23,21 @@ the best one — spreading load across the whole fleet and failing over if one d
 
 ---
 
-## Two tokens (roles)
+## Three tokens (roles)
 
 | Token | Who has it | What it unlocks |
 |---|---|---|
-| **`USER_TOKEN`** (the *fleet* token) | every server + the app (baked in) | streaming + routing (`/route`), heartbeat registration |
+| **`USER_TOKEN`** (the *app/streaming* token) | every server (as `SLIME_TOKEN`) + the app (baked in) | streaming + routing (`/route`), presence |
+| **`FLEET_TOKEN`** (server-only registration) | the relay + every server (never the app) | `/register` — the credential a server uses to join the fleet |
 | **`ADMIN_TOKEN`** | just you | the dashboard, the full fleet (names/addresses/load), and routing controls (disable / prefer a server) |
 
 Regular users are routed to a server automatically but never see the fleet.
-The **fleet token is the same value** as each server's `SLIME_TOKEN` — pick it once
-and reuse it everywhere. Generate tokens with `openssl rand -hex 20`.
+The **app/streaming token is the same value** as each server's `SLIME_TOKEN`
+(`SLIME_TOKEN` = `USER_TOKEN`) — pick it once and reuse it everywhere. The
+**registration token is a separate value**: the owner sets it on the relay with
+`wrangler secret put FLEET_TOKEN` and shares that SAME value with each server (in
+its `.env` as `FLEET_TOKEN`), so the app's baked-in token can't register or
+overwrite servers. Generate tokens with `openssl rand -hex 20`.
 
 ---
 
@@ -45,7 +50,7 @@ and reuse it everywhere. Generate tokens with `openssl rand -hex 20`.
 > **Just joining a friend's fleet?** You only do this step — see **[JOIN.md](JOIN.md)**.
 > On Windows the easiest path is to double-click **`SlimeWatch-Server.cmd`** (it
 > installs Node + deps, configures, and starts). Fleet owners can hand friends a
-> ready-to-run package with `server/make-friend-installer.sh <RELAY_URL> <FLEET_TOKEN> <name>`
+> ready-to-run package with `server/make-friend-installer.sh <RELAY_URL> <APP_TOKEN> <FLEET_TOKEN> <name>`
 > — the friend then answers nothing.
 
 **Prerequisite:** [Node.js 18+](https://nodejs.org).
@@ -79,13 +84,13 @@ The relay is a free, always-on Cloudflare Worker. You need a (free) Cloudflare a
 
 ```bash
 cd relay
-./deploy.sh <FLEET_TOKEN>        # Windows: ./deploy.ps1 <FLEET_TOKEN>
+./deploy.sh <USER_TOKEN> <FLEET_TOKEN>        # Windows: ./deploy.ps1 <USER_TOKEN> <FLEET_TOKEN>
 ```
 
 One command: it installs wrangler, opens the browser to log in, creates the KV
-store, sets **both** tokens (your `<FLEET_TOKEN>` as `USER_TOKEN`, plus a freshly
-generated `ADMIN_TOKEN` it prints — **save it**), and deploys. It ends by printing
-your dashboard URL.
+store, sets `USER_TOKEN` (app/streaming), sets `FLEET_TOKEN` (server-only
+registration), generates an `ADMIN_TOKEN` it prints — **save it** — and deploys.
+It ends by printing your dashboard URL.
 
 - **Admin dashboard:** `https://…workers.dev/?key=<ADMIN_TOKEN>` — see every server,
   and **Disable / Enable / Prefer** any of them. Changes apply to every device at once.
@@ -123,3 +128,4 @@ spreads out as you add machines. Lower a box's ceiling via `SESSION_CAP` in
 - ✅ Cross-platform extractor with guided setup + `doctor` self-check
 - ✅ Cloudflare relay + live dashboard with admin routing controls
 - ✅ App auto-routes across the whole fleet (reachable + least-loaded, with failover)
+- ✅ Each server also serves comics at `/comic/*` (batcave) automatically — no extra setup

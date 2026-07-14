@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const os = require('os');
 const { loadEnv, ipv4Candidates } = require('./env');
 
 loadEnv();
@@ -13,6 +14,7 @@ let fails = 0;
 const pass = (m) => console.log(`${OK}  ${m}`);
 const warn = (m) => console.log(`${WARN} ${m}`);
 const fail = (m) => { fails++; console.log(`${BAD} ${m}`); };
+const masked = (t) => `${t.slice(0, 6)}..., ${t.length} chars`;
 
 function get(url, headers) {
   return new Promise((resolve) => {
@@ -24,6 +26,31 @@ function get(url, headers) {
       });
       req.on('timeout', () => { req.destroy(); resolve({ status: 0, body: '', error: 'timeout' }); });
       req.on('error', (e) => resolve({ status: 0, body: '', error: e.message }));
+    } catch (e) { resolve({ status: 0, body: '', error: e.message }); }
+  });
+}
+
+function post(url, headers, body) {
+  return new Promise((resolve) => {
+    try {
+      const payload = JSON.stringify(body || {});
+      const lib = url.startsWith('https') ? require('https') : http;
+      const req = lib.request(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+          ...(headers || {}),
+        },
+        timeout: 6000,
+      }, (res) => {
+        let resBody = ''; res.on('data', (d) => (resBody += d));
+        res.on('end', () => resolve({ status: res.statusCode, body: resBody }));
+      });
+      req.on('timeout', () => { req.destroy(); resolve({ status: 0, body: '', error: 'timeout' }); });
+      req.on('error', (e) => resolve({ status: 0, body: '', error: e.message }));
+      req.write(payload);
+      req.end();
     } catch (e) { resolve({ status: 0, body: '', error: e.message }); }
   });
 }
@@ -45,14 +72,21 @@ async function main() {
   }
 
   // 3) .env + token
+  const token = (process.env.SLIME_TOKEN || '').trim();
+  const explicitFleetToken = (process.env.FLEET_TOKEN || '').trim();
+  const fleetToken = explicitFleetToken || token;
   if (!fs.existsSync(path.join(__dirname, '.env'))) {
     fail('No .env yet - run:  node setup.js');
   } else {
-    const t = (process.env.SLIME_TOKEN || '').trim();
-    (!t || t === 'change-me') ? fail('SLIME_TOKEN not set in .env - run:  node setup.js')
-                              : pass(`SLIME_TOKEN is set (${t.slice(0, 6)}..., ${t.length} chars)`);
+    (!token || token === 'change-me') ? fail('SLIME_TOKEN not set in .env - run:  node setup.js')
+                                      : pass(`SLIME_TOKEN is set (${masked(token)})`);
+    if (fleetToken && fleetToken !== 'change-me') {
+      const source = explicitFleetToken ? 'is set' : 'falls back to SLIME_TOKEN';
+      pass(`FLEET_TOKEN ${source} (${masked(fleetToken)})`);
+    } else {
+      fail('FLEET_TOKEN not set and SLIME_TOKEN fallback is not usable - run:  node setup.js');
+    }
   }
-  const token = (process.env.SLIME_TOKEN || '').trim();
   const port = process.env.PORT || '8787';
 
   // 4) Advertised address
@@ -78,11 +112,27 @@ async function main() {
   if (!relay) {
     warn('RELAY_URL not set - running standalone (no fleet). Set it in .env to join the relay.');
   } else {
+    const name = process.env.SERVER_NAME || os.hostname();
+    const reg = await post(`${relay}/register`, { authorization: `Bearer ${fleetToken}` }, {
+      id: `${name}-${port}`,
+      name,
+      os: `${os.platform()} ${os.release()} (${os.arch()})`,
+      address: chosen,
+      load: 0,
+      capacity: 80,
+      version: 1,
+      ts: Date.now(),
+    });
+    if (reg.status === 200) pass('Relay reachable and registration accepted');
+    else if (reg.status === 401) fail('relay rejected registration (401) - this server\'s FLEET_TOKEN must equal the relay\'s FLEET_TOKEN (ask your host).');
+    else if (reg.status === 0) fail(`Could not reach the relay (${reg.error}) - check RELAY_URL and your connection.`);
+    else fail(`Relay returned ${reg.status} for ${relay}/register - is the URL right and the relay deployed?`);
+
     const r = await get(`${relay}/route`, { authorization: `Bearer ${token}` });
-    if (r.status === 200) pass(`Relay reachable and token accepted (${relay})`);
-    else if (r.status === 401) fail(`Relay rejected the token (401) - this server's SLIME_TOKEN must equal the relay's USER_TOKEN.`);
-    else if (r.status === 0) fail(`Could not reach the relay (${r.error}) - check RELAY_URL and your connection.`);
-    else fail(`Relay returned ${r.status} for ${relay}/route - is the URL right and the relay deployed?`);
+    if (r.status === 200) pass(`Relay streaming token accepted (${relay}/route)`);
+    else if (r.status === 401) fail('Relay rejected the streaming token (401) - this server\'s SLIME_TOKEN must equal the relay\'s USER_TOKEN.');
+    else if (r.status === 0) fail(`Could not check relay streaming token (${r.error}) - check RELAY_URL and your connection.`);
+    else fail(`Relay returned ${r.status} for ${relay}/route while checking the streaming token.`);
   }
 
   console.log('\n-----------------------------------------------------');

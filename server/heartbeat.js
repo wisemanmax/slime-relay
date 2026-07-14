@@ -6,6 +6,10 @@ const { ipv4Candidates } = require('./env');
 
 const RELAY_URL = (process.env.RELAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.SLIME_TOKEN || '';
+// Registering with the relay uses a SERVER-ONLY credential (FLEET_TOKEN), never
+// the app's client token — so the app token can't be used to poison the fleet.
+// Falls back to SLIME_TOKEN until you set FLEET_TOKEN here + on the relay.
+const FLEET_TOKEN = process.env.FLEET_TOKEN || TOKEN;
 const NAME = process.env.SERVER_NAME || os.hostname();
 const PUBLIC_ADDRESS = process.env.PUBLIC_ADDRESS || '';
 const INTERVAL_MS = 30_000;
@@ -36,7 +40,7 @@ function start({ getLoad, capacity, port }) {
     try {
       const res = await fetch(`${RELAY_URL}/register`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${FLEET_TOKEN}` },
         body: JSON.stringify({
           id,
           name: NAME,
@@ -50,8 +54,9 @@ function start({ getLoad, capacity, port }) {
       });
       if (!res.ok) {
         if (res.status === 401) {
-          console.warn('[heartbeat] relay rejected us (401): this server\'s SLIME_TOKEN does not match');
-          console.warn('            the relay\'s USER_TOKEN. Make them identical, then restart.');
+          console.warn('[heartbeat] relay rejected us (401): this server\'s registration token does not');
+          console.warn('            match the relay. If the relay has FLEET_TOKEN set, set the SAME value');
+          console.warn('            as FLEET_TOKEN in this server\'s .env; otherwise match SLIME_TOKEN to USER_TOKEN.');
         } else {
           console.warn('[heartbeat] relay responded', res.status, '- is RELAY_URL correct?');
         }

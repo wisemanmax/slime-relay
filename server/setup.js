@@ -36,34 +36,44 @@ async function main() {
   // Most people are JOINING someone else's fleet: they must paste the exact
   // token the relay owner gave them. Auto-generating here (the old default) was
   // a footgun -- pressing Enter minted a NEW token that didn't match the fleet.
-  console.log('1) Fleet token - the shared secret for your fleet.');
+  console.log('1) App token - the app/streaming token, stored here as SLIME_TOKEN.');
   console.log('   JOINING someone\'s fleet? Paste the EXACT token they gave you (their relay USER_TOKEN).');
   console.log('   Every server + the app on one fleet use the SAME value.');
   console.log('   Starting your OWN brand-new relay from scratch? Type  new  to generate one.');
   let token = cur('SLIME_TOKEN') && cur('SLIME_TOKEN') !== 'change-me' ? cur('SLIME_TOKEN') : '';
-  let tokAns = await ask('   Fleet token (paste it, or "new")', token);
+  let tokAns = await ask('   App token (paste it, or "new")', token);
   if (tokAns.toLowerCase() === 'new') {
     tokAns = crypto.randomBytes(20).toString('hex');
-    console.log('   -> Generated a NEW fleet token: ' + tokAns);
-    console.log('      Use this SAME value as your relay USER_TOKEN and in the app.');
+    console.log('   -> Generated a NEW app token and saved it as SLIME_TOKEN in .env.');
+    console.log('      Read it from .env and use the SAME value as your relay USER_TOKEN and in the app.');
   }
   token = tokAns;
 
+  // ---- Registration token ----
+  const currentFleetToken = cur('FLEET_TOKEN');
+  console.log('\n2) Registration token - server-only REGISTRATION token for /register.');
+  console.log('   The relay owner shares this value. It is separate from the app token above.');
+  console.log('   Leave blank to reuse the app token (SLIME_TOKEN) above.');
+  if (currentFleetToken) console.log('   Existing FLEET_TOKEN is set; press Enter to keep it.');
+  // Blank reuses SLIME_TOKEN: keep an existing FLEET_TOKEN on re-run, else fall
+  // back to the app token above (matches heartbeat.js / doctor.js runtime fallback).
+  const fleetToken = (await ask('   FLEET_TOKEN', '')) || currentFleetToken || token;
+
   // ---- Relay URL ----
-  console.log('\n2) Relay URL - where this server registers. The relay owner gives you this,');
+  console.log('\n3) Relay URL - where this server registers. The relay owner gives you this,');
   console.log('   e.g. https://slime-relay.THEIR-NAME.workers.dev  (do NOT deploy your own).');
   console.log('   Leave blank only to run standalone (no dashboard / no fleet).');
   const relay = (await ask('   RELAY_URL', cur('RELAY_URL'))).replace(/\/+$/, '');
 
   // -- Name --
-  console.log('\n3) Friendly name shown on the dashboard.');
+  console.log('\n4) Friendly name shown on the dashboard.');
   const name = await ask('   SERVER_NAME', cur('SERVER_NAME') || os.hostname());
 
   // -- Port --
-  const port = await ask('\n4) Port to listen on', cur('PORT') || '8787');
+  const port = await ask('\n5) Port to listen on', cur('PORT') || '8787');
 
   // -- Public address --
-  console.log('\n5) How the Apple TV / app reaches THIS machine.');
+  console.log('\n6) How the Apple TV / app reaches THIS machine.');
   const cands = ipv4Candidates(port);
   if (cands.length) {
     console.log('   Detected addresses on this machine:');
@@ -85,6 +95,7 @@ async function main() {
 # .env is gitignored - never commit it.
 
 SLIME_TOKEN=${token}
+FLEET_TOKEN=${fleetToken}
 PORT=${port}
 RELAY_URL=${relay}
 PUBLIC_ADDRESS=${publicAddr}

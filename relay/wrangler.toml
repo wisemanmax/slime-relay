@@ -8,6 +8,16 @@ kv_namespaces = [
   { binding = "SERVERS", id = "PASTE_KV_NAMESPACE_ID_HERE" }
 ]
 
-# RELAY_TOKEN is a secret, NOT set here. Set it with:
-#   npx wrangler secret put RELAY_TOKEN
-# (use the same value as SLIME_TOKEN on your servers / in the app)
+# Secrets (NOT stored here) — set each with `npx wrangler secret put <NAME>`:
+#   ADMIN_TOKEN   full control (dashboard, fleet view, controls). Owner only.
+#   USER_TOKEN    the app's client token (baked into the app → treat as public).
+#   FLEET_TOKEN   server-only registration credential. Generate a NEW random value
+#                 (NOT the app token); set it here AND as FLEET_TOKEN in each
+#                 server's .env. Once set, the app token can no longer poison the
+#                 fleet. (Until set, /register still accepts USER_TOKEN so nothing
+#                 breaks — setting it activates the hardening.)
+#
+# Optional hardening var — reject public IPs, allow only Tailscale/private hosts.
+# Turn on once the fleet is on Tailscale (or via `wrangler secret put ADDR_PRIVATE_ONLY`):
+# [vars]
+# ADDR_PRIVATE_ONLY = "1"
