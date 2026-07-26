@@ -51,9 +51,12 @@ const DEFAULT_PROVIDERS = {
     vidsrcme3: 'vidsrcme.su',
   },
   animeHosts: {
-    // vidsrc.cc's origin was 522-ing at audit time and vidsrc.icu is NXDOMAIN,
-    // so anime has no working host — left overridable for a KV fix when one
-    // appears (set the "providers" KV rather than redeploying).
+    // tryembed is the working PRIMARY (verified 2026-07-25 in a real browser:
+    // AniList 21 → ONE PIECE ep1 sub 24:37, AniList 16498 → ATTACK ON TITAN ep1
+    // dub with a loaded 1556s stream). vidsrc.cc's origin was 522-ing and
+    // vidsrc.icu is NXDOMAIN — both kept as overridable fallbacks so a revival
+    // is a KV edit, not a build.
+    tryembed: 'tryembed.us.cc',
     vidsrccc: 'vidsrc.cc',
     vidsrcicu: 'vidsrc.icu',
   },
