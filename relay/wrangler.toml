@@ -5,7 +5,7 @@ compatibility_date = "2024-11-01"
 # KV holds the live server heartbeats. Create it once, then paste the id below:
 #   npx wrangler kv namespace create SERVERS
 kv_namespaces = [
-  { binding = "SERVERS", id = "PASTE_KV_NAMESPACE_ID_HERE" }
+  { binding = "SERVERS", id = "9c3ac589853c42d69f1f358b38bf654f" }
 ]
 
 # Secrets (NOT stored here) — set each with `npx wrangler secret put <NAME>`:

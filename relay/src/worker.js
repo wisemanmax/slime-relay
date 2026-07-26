@@ -33,18 +33,27 @@ const PRESENCE_TTL = 120;
 // domains constantly; the apps fetch this on launch and override their baked
 // defaults, so a rotation is a one-line edit here (or in the KV key "providers")
 // instead of a new app build. Edit + redeploy, or set the KV to override live.
+// Audited 2026-07-25: dropped embedsu (embed.su NXDOMAIN), autoembed
+// (autoembed.cc NXDOMAIN), pstream (iframe.pstream.org lapsed → ParkLogic
+// parking redirector) and vidsrcto (Cloudflare challenge never clears, not on
+// the official mirror list). Old shipped builds still carry those baked hosts,
+// so they're ALSO killed via the extractor's manifest.json providers.disabled —
+// removing them here only stops handing the hosts out, it can't remove a rung.
+// Mirrors are chosen to serve directly: vidsrc-embed.ru and vsrc.su both 302 to
+// vsembed.ru, which would collapse two ladder rungs onto one origin.
 const DEFAULT_PROVIDERS = {
   hosts: {
     vidlink: 'vidlink.pro',
-    vidfast: 'vidfast.pro',
+    vidfast: 'vidfast.vc',
     vidsrccc: 'vidsrc.cc',
-    embedsu: 'embed.su',
-    autoembed: 'player.autoembed.cc',
-    pstream: 'iframe.pstream.org',
-    vidsrcto: 'vidsrc.to',
     vidsrcme: 'vidsrcme.ru',
+    vidsrcme2: 'vidsrc2.ru',
+    vidsrcme3: 'vidsrcme.su',
   },
   animeHosts: {
+    // vidsrc.cc's origin was 522-ing at audit time and vidsrc.icu is NXDOMAIN,
+    // so anime has no working host — left overridable for a KV fix when one
+    // appears (set the "providers" KV rather than redeploying).
     vidsrccc: 'vidsrc.cc',
     vidsrcicu: 'vidsrc.icu',
   },
