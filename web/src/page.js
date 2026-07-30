@@ -263,7 +263,23 @@ export const PAGE = `<!doctype html>
 
 <script>
 const IMG = (p,sz)=> p ? 'https://image.tmdb.org/t/p/'+sz+p : null;
-const api = async (path)=> { try { const r = await fetch('/api/tmdb/'+path); return r.ok ? await r.json() : null; } catch { return null; } };
+/* The worker 302s any /api/* call to /login once the session cookie is missing
+   or stale, and fetch FOLLOWS redirects — so the caller gets 200 + the login
+   page's HTML and every JSON parse throws. The app used to report that as a
+   network error, a bad TMDB_TOKEN, or a missing SLIME_TOKEN: one expired cookie,
+   three different wrong diagnoses, none of them mentioning signing in. Detect the
+   bounce once, here. */
+function loginBounce(r){
+  try { if (r.redirected && new URL(r.url).pathname.startsWith('/login')) return true; } catch(e){}
+  // A JSON endpoint answering 200 with HTML is the login page in disguise.
+  return r.ok && (r.headers.get('content-type')||'').includes('text/html');
+}
+async function apiFetch(path, opts){
+  const r = await fetch(path, opts);
+  if (loginBounce(r)) { location.href = '/login'; throw new Error('session-expired'); }
+  return r;
+}
+const api = async (path)=> { try { const r = await apiFetch('/api/tmdb/'+path); return r.ok ? await r.json() : null; } catch { return null; } };
 const kindOf = (it)=> it.media_type ? (it.media_type==='tv'?'tv':'movie') : (it.name && !it.title ? 'tv' : 'movie');
 const titleOf = (it)=> it.title || it.name || 'Untitled';
 const yearOf = (it)=> (it.release_date||it.first_air_date||'').slice(0,4);
@@ -446,7 +462,7 @@ function closeSettings(){ document.getElementById('setmodal').classList.remove('
 async function connectDebrid(){ const f=document.getElementById('rdfield'), st=document.getElementById('rdstatus');
   const key=(f.value||'').trim(); if(!key){ st.style.color='#f4665f'; st.textContent='Paste your token first.'; return; }
   st.style.color='var(--dim)'; st.textContent='Checking…';
-  try{ const r=await fetch('/api/rdcheck',{headers:{'x-rd-key':key}}); const j=await r.json();
+  try{ const r=await apiFetch('/api/rdcheck',{headers:{'x-rd-key':key}}); const j=await r.json();
     if(j.valid){ save('sw_rdkey',key); st.style.color='var(--accent)';
       st.innerHTML='✓ Connected'+(j.name?' as <b>'+esc(j.name)+'</b>':'')+'. Debrid HD is on — reopen the player to use it.'; }
     else { st.style.color='#f4665f'; st.textContent = j.reason==='invalid'?'Real-Debrid rejected that token — check it and try again.':'Couldn\\'t reach Real-Debrid — try again in a moment.'; }
@@ -575,7 +591,7 @@ function isSportsCh(name){ const n=name.toLowerCase(); return SPORTS_KW.some(k=>
 async function viewLive(){
   const main=document.getElementById('main');
   main.innerHTML='<div class="empty">Loading live channels…</div>';
-  if(!liveChans){ try{ const r=await fetch('/api/live/channels'); const j=await r.json(); liveChans=j.channels||[]; }catch{ liveChans=[]; } }
+  if(!liveChans){ try{ const r=await apiFetch('/api/live/channels'); const j=await r.json(); liveChans=j.channels||[]; }catch{ liveChans=[]; } }
   const sports=(liveChans||[]).filter(x=>isSportsCh(x.name)).sort((a,b)=>a.name.localeCompare(b.name));
   if(!sports.length){ main.innerHTML='<div class="empty">No live channels right now.<br><br>The site\\'s <b>SLIME_TOKEN</b> / <b>EXTRACTOR_BASE</b> secrets may be unset, or the server is offline.</div>'; return; }
   const cards=sports.map(ch=>\`<div class="card" onclick="playLive('\${ch.id}')"><div style="height:112px;border-radius:12px;background:linear-gradient(135deg,#1f6feb,#0a0f1c);display:flex;align-items:center;justify-content:center;text-align:center;padding:8px;font-weight:800;font-size:13px;color:#fff;line-height:1.2">\${esc(ch.name)}</div><div class="t"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#e5484d;margin-right:5px"></span>LIVE</div></div>\`).join('');
@@ -590,7 +606,7 @@ async function playLive(id){
   const v=document.getElementById('pvideo'); v.style.display='';
   document.getElementById('player').classList.add('open');
   setLoading(true,'Connecting to '+name+'…');
-  try{ const r=await fetch('/api/live/resolve?id='+encodeURIComponent(id)); const j=await r.json();
+  try{ const r=await apiFetch('/api/live/resolve?id='+encodeURIComponent(id)); const j=await r.json();
     if(!j.play) throw 0; playHls(v,j.play); }
   catch{ setLoading(false); setHint('Couldn\\'t start that channel — try another.'); }
 }
