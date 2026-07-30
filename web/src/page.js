@@ -8,7 +8,7 @@ export const PAGE = `<!doctype html>
 <title>SlimeWatch</title>
 <style>
   :root{
-    --bg:#0a0d0b; --panel:#121613; --line:#1f2723; --accent:#37e29a;
+    --bg:#000; --panel:#121613; --line:#1f2723; --accent:#35C759;
     --txt:#e9f1ec; --dim:#8b978f; --dim2:#5f6b63;
   }
   *{box-sizing:border-box}
@@ -129,10 +129,91 @@ export const PAGE = `<!doctype html>
   .player .upnext.on{opacity:1;transform:none}
   .player .upnext b{color:var(--accent)}
 
-  @media(max-width:640px){
-    header{gap:12px;padding:12px 14px}
-    .hero .inner{padding:0 20px;bottom:24px} .row h2,.track,.grid{padding-left:20px;padding-right:20px}
-    .search-box input{width:96px}
+  /* ─── Mobile: mirrors the iOS app's Home ─────────────────────────────────
+     Wordmark header → filter pills → inset 16:9 hero with dots → poster
+     shelves → floating tab bar. Desktop is untouched; everything here is
+     scoped to the phone width. */
+  .pills-row,#tabbar,.m-only,.hdr-icons{display:none}   /* phone-only chrome */
+
+  @media(max-width:700px){
+    /* Header: wordmark + icons only. Nav becomes pills, search becomes a tab. */
+    header{gap:0;padding:14px 16px 10px;justify-content:space-between;
+      background:linear-gradient(to bottom,#000 0%,rgba(0,0,0,.72) 60%,transparent)}
+    .brand{font-size:24px;letter-spacing:1.2px;color:var(--accent)}
+    .brand span{color:var(--accent)}
+    header nav,header .search-box,header .logout.desktop{display:none}
+    .hdr-icons{display:flex;align-items:center;gap:14px}
+    .hdr-icons .ic{width:34px;height:34px;border-radius:50%;background:#1c1f1d;
+      display:grid;place-items:center;font-size:16px;cursor:pointer;color:#fff}
+    .hdr-icons .ic.me{background:rgba(53,199,89,.18);border:2px solid var(--accent)}
+
+    /* Filter pills (All · Movies · Series · Anime) */
+    .pills-row{display:flex;gap:10px;overflow-x:auto;padding:2px 16px 14px;
+      scrollbar-width:none}
+    .pills-row button{flex:0 0 auto;height:34px;padding:0 18px;border-radius:17px;
+      font-size:15px;font-weight:700;cursor:pointer;
+      background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,.5)}
+    .pills-row button.on{background:#fff;color:#000;border-color:#fff}
+
+    /* Hero: an inset 16:9 card, not a full-bleed banner */
+    .hero{height:auto;overflow:visible;padding:0 16px}
+    .hero .bg{position:absolute;inset:0;background-position:center 22%}
+    .hero::after{display:none}   /* desktop's side-scrim; the card draws its own */
+    .hero .stagewrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+      background:linear-gradient(0deg,rgba(0,0,0,.92) 4%,rgba(0,0,0,.35) 46%,transparent 78%)}
+    .hero .stagewrap{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden}
+    .hero .inner{position:absolute;left:0;right:0;bottom:0;padding:0 14px 12px;max-width:none}
+    .hero .eyebrow,.hero p.ov,.btn.icon,.btn.ghost{display:none}
+    .hero h1{font-size:27px;line-height:1.08;margin:0 0 6px;max-width:72%}
+    .hero .pills{gap:0;margin:0 0 2px}
+    .hero .pills .pill{border:0;background:none;padding:0;color:rgba(255,255,255,.78);
+      font-size:13px}
+    /* Padding, not a spaced string: whitespace inside the content property
+       collapses at the element boundary, which rendered "7.8 ·Series". */
+    .hero .pills .pill:not(:last-child)::after{content:"·";padding:0 7px;
+      color:rgba(255,255,255,.45)}
+    .hero .pills .pill.rate{color:rgba(255,255,255,.78)}
+    .btns{position:absolute;right:14px;bottom:14px;margin:0}
+    .btn.play{padding:9px 20px;border-radius:22px;font-size:15px}
+    .dots{position:static;display:flex;justify-content:center;gap:6px;padding:10px 0 2px}
+    .dots i{width:6px;height:6px;background:rgba(255,255,255,.28)}
+    .dots i.on{width:18px;border-radius:6px;background:var(--accent)}
+
+    /* Shelves: portrait posters, app proportions */
+    .row{margin:18px 0}
+    .row h2{font-size:17px;padding:0 16px;margin-bottom:9px}
+    .track{gap:12px;padding:0 16px 4px}
+    .card{width:112px}
+    .card img,.card .ph{width:112px;height:168px;border-radius:8px}
+    .card .t{font-size:12px;margin-top:6px}
+    .grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:14px;padding:14px 16px}
+
+    /* Room for the floating bar */
+    main{padding-bottom:104px}
+
+    /* Floating tab bar */
+    #tabbar{display:flex;position:fixed;left:10px;right:10px;bottom:8px;z-index:70;
+      padding:5px;gap:0;border-radius:26px;
+      background:rgba(28,31,29,.82);backdrop-filter:blur(18px);
+      border:1px solid rgba(255,255,255,.09);box-shadow:0 8px 26px rgba(0,0,0,.5)}
+    #tabbar button{flex:1;background:none;border:0;cursor:pointer;color:rgba(255,255,255,.62);
+      padding:8px 0 7px;border-radius:21px;display:flex;flex-direction:column;
+      align-items:center;gap:3px;font-size:9px;font-weight:800;letter-spacing:.2px}
+    #tabbar button .g{font-size:17px;line-height:1}
+    #tabbar button.on{background:var(--accent);color:#000}
+
+    /* Search gets its own screen, like the iOS tab */
+    .m-search{display:flex;gap:10px;padding:0 16px 12px}
+    .m-search input{flex:1;width:100%;background:#141814;border:1px solid var(--line);border-radius:12px;
+      color:var(--txt);font-size:16px;padding:11px 14px;outline:none}
+    .m-only{display:block}
+
+    /* Sheets go full-height like a native cover */
+    .sheet{margin:0;border-radius:0;min-height:100%;border:0}
+    .sheet .back{height:230px}
+    .sheet .body{padding:0 16px 30px;margin-top:-56px}
+    .sheet h1{font-size:25px}
+    .eps{grid-template-columns:1fr}
   }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
@@ -145,10 +226,21 @@ export const PAGE = `<!doctype html>
       <span style="color:var(--dim)">⌕</span>
       <input id="q" placeholder="Search…" autocomplete="off">
     </div>
-    <span class="logout" onclick="openSettings()" title="Debrid settings" style="font-size:18px;line-height:1">⚙</span>
-    <span class="logout" onclick="location.href='/logout'">Sign out</span>
+    <span class="logout desktop" onclick="openSettings()" title="Debrid settings" style="font-size:18px;line-height:1">⚙</span>
+    <span class="logout desktop" onclick="location.href='/logout'">Sign out</span>
+    <!-- Phone-only header cluster, mirroring the app: dice, profile, settings. -->
+    <div class="hdr-icons">
+      <span class="ic" title="Surprise me" onclick="surprise()">🎲</span>
+      <span class="ic me" title="Sign out" onclick="location.href='/logout'">🍿</span>
+      <span class="ic" title="Settings" onclick="openSettings()">⚙</span>
+    </div>
   </header>
+  <div class="pills-row" id="pills"></div>
   <main id="main"></main>
+  <!-- Floating tab bar (phones only). Four tabs, because the web app has no
+       Reading section — Movies/Series/Anime live in the pills, exactly as they
+       do on iOS Home. -->
+  <nav id="tabbar"></nav>
 
   <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
   <div class="modal" id="setmodal"><div class="sheet" id="setsheet" style="max-width:540px;margin-top:70px"></div></div>
@@ -228,8 +320,10 @@ function renderHero(items){ heroItems=items.filter(x=>x.backdrop_path).slice(0,6
   clearInterval(heroTimer);
   if(!heroItems.length) return '';
   heroTimer=setInterval(()=>{ heroI=(heroI+1)%heroItems.length; paintHero(); },8000);
-  return \`<section class="hero" id="hero"><div class="bg" id="herobg"></div>
-    <div class="inner" id="heroinner"></div><div class="dots" id="herodots"></div></section>\`; }
+  return \`<section class="hero" id="hero"><div class="stagewrap">
+    <div class="bg" id="herobg"></div>
+    <div class="inner" id="heroinner"></div></div>
+    <div class="dots" id="herodots"></div></section>\`; }
 function paintHero(){ const it=heroItems[heroI]; if(!it) return; const k=kindOf(it);
   const bg=document.getElementById('herobg'); if(bg) bg.style.backgroundImage=\`url(\${IMG(it.backdrop_path,'w1280')})\`;
   const inner=document.getElementById('heroinner');
@@ -513,11 +607,74 @@ function playHls(v,url){
 
 // ── Router ──
 function go(hash){ location.hash=hash; }
+
+/* ─── Phone chrome ────────────────────────────────────────────────────────────
+   The pills and tab bar mirror the iOS app: Movies/Series/Anime are FILTERS on
+   Home there, not destinations, while the bar carries the top-level jobs. Both
+   render on every route so the highlight always matches where you are. */
+const M_PILLS = [['home','All'],['movies','Movies'],['tv','Series'],['anime','Anime']];
+const M_TABS  = [['home','⌂','Home'],['search','⌕','Search'],
+                 ['live','((‧))','Live TV'],['list','❏','My Stuff']];
+
+function renderPills(active){
+  const el=document.getElementById('pills'); if(!el) return;
+  // Pills belong to the browse surfaces only — they'd be meaningless on Search,
+  // Live TV or My Stuff, which is also how the app behaves.
+  const show=['home','movies','tv','anime'].includes(active);
+  el.style.display = show ? '' : 'none';
+  if(!show){ el.innerHTML=''; return; }
+  el.innerHTML = M_PILLS.map(([r,l]) =>
+    \`<button class="\${r===active?'on':''}" onclick="go('#\${r}')">\${l}</button>\`).join('');
+}
+
+function renderTabbar(active){
+  const el=document.getElementById('tabbar'); if(!el) return;
+  // Movies/Series/Anime are pill routes, so they keep Home lit in the bar.
+  const tab = ['movies','tv','anime'].includes(active) ? 'home' : active;
+  el.innerHTML = M_TABS.map(([r,g,l]) =>
+    \`<button class="\${r===tab?'on':''}" onclick="go('#\${r}')">\
+<span class="g">\${g}</span>\${l}</button>\`).join('');
+}
+
+/* Search as its own screen, the way the iOS tab works, rather than a field
+   wedged into the header. Reuses viewSearch for results. */
+function viewSearchScreen(){
+  const main=document.getElementById('main');
+  main.innerHTML = \`<div class="m-search">
+      <input id="mq" placeholder="Search movies, shows & anime" autocomplete="off"
+             autocapitalize="none" enterkeyhint="search">
+    </div><div id="mres"><div class="empty">Type to search movies, shows &amp; anime.</div></div>\`;
+  const input=document.getElementById('mq'); if(!input) return;
+  let t=null;
+  input.addEventListener('input', e=>{
+    clearTimeout(t);
+    const q=e.target.value.trim();
+    t=setTimeout(()=>searchInto(q,'mres'), 280);
+  });
+  input.focus();
+}
+
+/* Same query as viewSearch, rendered into a container instead of over main, so
+   the search field stays put while results change. */
+async function searchInto(q, targetID){
+  const box=document.getElementById(targetID); if(!box) return;
+  if(!q||q.length<2){ box.innerHTML='<div class="empty">Type to search movies, shows &amp; anime.</div>'; return; }
+  box.innerHTML='<div class="empty">Searching…</div>';
+  const r=await api('search/multi?query='+encodeURIComponent(q));
+  const items=(r?.results||[]).filter(x=>x.media_type!=='person' && x.poster_path);
+  box.innerHTML = items.length ? \`<div class="grid">\${items.map(card).join('')}</div>\`
+                              : '<div class="empty">No matches for \u201C'+esc(q)+'\u201D.</div>';
+}
 function route(){ const h=location.hash.slice(1)||'home';
   closeDetail();
   const base=h.split('/')[0];
-  renderNav(['home','movies','tv','live','anime','list'].includes(base)?base:'home');
-  if(base==='home') viewHome();
+  const known=['home','movies','tv','live','anime','list','search'];
+  const active=known.includes(base)?base:'home';
+  renderNav(active==='search'?'home':active);
+  renderPills(active);
+  renderTabbar(active);
+  if(base==='search') viewSearchScreen();
+  else if(base==='home') viewHome();
   else if(base==='live') viewLive();
   else if(base==='movies') viewList('movie','Movies',[
     {path:'movie/popular',label:'Popular'},{path:'movie/top_rated',label:'Top Rated'},
