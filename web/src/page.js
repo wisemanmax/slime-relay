@@ -513,9 +513,63 @@ function play(it,kind,s,e){ pCtx={it,kind,s,e}; resumeAt=savedPos(it.id,kind,s,e
     else { selectSource(PROVIDERS[0][0]); setHint(debridWhy(res.reason)); }  // transparent about why
   });
 }
+/* Browser can decode these; anything else (mkv/avi/4K remux) is skipped. Mirrors
+   WEB_PLAYABLE in the worker — keep the two in step. */
+const WEB_PLAYABLE=/\\.(mp4|webm|mov|m4v)$/i;
+function qualityOf(t){ t=String(t).toLowerCase();
+  if(/2160|\\b4k\\b|uhd/.test(t)) return 2160;
+  if(/1440/.test(t)) return 1440;
+  if(/1080/.test(t)) return 1080;
+  if(/720/.test(t)) return 720;
+  if(/480/.test(t)) return 480;
+  return 0; }
+function shortName(fn){ return String(fn).replace(/\\.[^.]+$/,'').replace(/[._]+/g,' ').trim().slice(0,46); }
+
+/* Torrentio's response → the player's source list. Same rules as the worker. */
+function pickDebridStreams(data){
+  const out=[];
+  for(const x of (data&&data.streams)||[]){
+    const fn=(x.behaviorHints&&x.behaviorHints.filename)||x.title||x.name||'';
+    const txt=(x.name||'')+' '+(x.title||'');
+    if(!x.url||!/^https?:/i.test(x.url)) continue;   // not a cached direct link
+    if(!WEB_PLAYABLE.test(fn)) continue;             // browser can't decode it
+    if(/download/i.test(txt)) continue;              // Torrentio marks uncached RD "download"
+    const q=qualityOf(txt);
+    out.push({url:x.url, quality:q, label:(q?q+'p':'SD')+' · '+shortName(fn)});
+  }
+  out.sort((a,b)=>b.quality-a.quality);
+  return out.slice(0,10);
+}
+
 async function resolveDebrid(it,kind,s,e){
   const key=getRdKey(); if(!key) return {streams:[],reason:'no-key'};   // BYO: no key → skip the round-trip
-  // Bounded so a slow/hung torrentio can't stall playback — times out → embed.
+
+  /* Ask Torrentio from the BROWSER first.
+     The Worker route kept failing with a torrentio-* status while the same
+     request from a normal connection answered in under half a second — Torrentio
+     sits behind Cloudflare and does not welcome Worker egress. Torrentio sends
+     access-control-allow-origin: *, so the page can just ask it directly, from
+     the user's own connection, which is also what the iOS and TV apps do.
+     No new exposure: the key already travels to Torrentio inside this URL, and
+     the stream links it returns are RD CDN redirects either way. */
+  try{
+    const ext=await api((kind==='tv'?'tv/':'movie/')+it.id+'/external_ids');
+    const imdb=ext&&ext.imdb_id;
+    if(imdb&&imdb.indexOf('tt')===0){
+      const id = kind==='tv' ? imdb+':'+s+':'+e : imdb;
+      const cfg='sort=qualitysize%7Cqualityfilter=cam,scr,unknown%7Crealdebrid='+encodeURIComponent(key);
+      const url='https://torrentio.strem.fun/'+cfg+'/stream/'+(kind==='tv'?'series':'movie')+'/'+id+'.json';
+      const r=await fetch(url,{signal:AbortSignal.timeout(9000)});
+      if(r.ok){
+        const streams=pickDebridStreams(await r.json());
+        if(streams.length) return {streams, reason:''};
+        return {streams:[], reason:'none-playable'};
+      }
+    }
+  }catch(e){ /* fall through to the Worker route below */ }
+
+  // Fallback: the original server-side path, still bounded so a hung request
+  // can't stall playback.
   try{ const r=await fetch(\`/api/debrid?tmdb=\${it.id}&kind=\${kind}&s=\${s}&e=\${e}\`, { headers:{'x-rd-key':key}, signal: AbortSignal.timeout(6000) });
     if(!r.ok) return {streams:[],reason:'error'}; const j=await r.json(); return {streams:j.streams||[], reason:j.reason||''}; }
   catch{ return {streams:[],reason:'timeout'}; }
@@ -525,7 +579,8 @@ function debridWhy(reason){
   if(reason==='no-key') return '⚡ Debrid is off — <b onclick="openSettings()" style="cursor:pointer;text-decoration:underline">add your Real-Debrid key</b> to unlock clean HD. Using an embed source for now.';
   if(reason==='bad-key') return 'Your saved Real-Debrid key looks malformed — <b onclick="openSettings()" style="cursor:pointer;text-decoration:underline">re-enter it</b>. Using an embed source.';
   if(reason==='no-imdb') return 'Debrid couldn\\'t match this title — using an embed source.';
-  if(reason&&reason.indexOf('torrentio')===0) return 'Debrid source is unreachable right now — using an embed source.';
+  if(reason==='none-playable') return 'Debrid has this title, but only in containers a browser can\\'t play (mkv / 4K remux) — using an embed source.';
+  if(reason&&reason.indexOf('torrentio')===0) return 'Debrid source unreachable ('+esc(reason)+') — using an embed source.';
   return 'No browser-playable debrid file for this title (4K remux / mkv can\\'t play in a browser) — using an embed source. A browser ad blocker makes it ad-free.';
 }
 function buildSources(){ const sel=document.getElementById('psel');
