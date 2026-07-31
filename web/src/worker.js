@@ -75,6 +75,32 @@ export default {
     // EXTRACTOR_BASE = https://slime.byheir.com. The resolved play URL still
     // carries the token in its query (the browser's hls.js fetches the m3u8
     // directly, cross-origin — the extractor sends Access-Control-Allow-Origin:*).
+    /* Ad-free tier. The embed providers monetise through popups and actively
+       refuse to run in a sandboxed iframe ("Please Disable Sandbox"), so their
+       ads cannot be blocked from this side. The extractor already solves this
+       for the iOS and TV apps: hand it an embed URL, get the underlying stream
+       back, and play THAT in a <video> — no third-party frame, so no ads at all.
+       Host allowlisting happens extractor-side (SLIME_EMBED_HOSTS). */
+    if (url.pathname === '/api/resolve') {
+      if (!env.SLIME_TOKEN || !env.EXTRACTOR_BASE) return json({ error: 'not-configured' }, 503);
+      const embed = url.searchParams.get('embed') || '';
+      if (!/^https:\/\//i.test(embed)) return json({ error: 'bad-embed' }, 400);
+      const base = env.EXTRACTOR_BASE.replace(/\/+$/, '');
+      const target = new URL(base + '/resolve');
+      target.searchParams.set('source', 'embed');
+      target.searchParams.set('embed', embed);
+      try {
+        const r = await fetch(target.toString(), {
+          headers: { authorization: `Bearer ${env.SLIME_TOKEN}` },
+          signal: AbortSignal.timeout(20000),
+        });
+        if (!r.ok) return json({ error: 'resolve-' + r.status }, 200);
+        return json(await r.json());
+      } catch {
+        return json({ error: 'resolve-unreachable' }, 200);
+      }
+    }
+
     if (url.pathname === '/api/live/channels' || url.pathname === '/api/live/resolve') {
       if (!env.SLIME_TOKEN || !env.EXTRACTOR_BASE) return json({ error: 'live-not-configured' }, 503);
       const base = env.EXTRACTOR_BASE.replace(/\/+$/, '');

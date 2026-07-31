@@ -254,7 +254,15 @@ export const PAGE = `<!doctype html>
     </div>
     <div class="stage">
       <video id="pvideo" controls playsinline preload="auto" style="display:none"></video>
-      <iframe id="pframe" allowfullscreen allow="autoplay; fullscreen; encrypted-media" style="display:none"></iframe>
+      <!-- sandbox is the real popup blocker. Omitting allow-popups stops the embed
+           opening ad tabs; omitting allow-top-navigation stops it redirecting this
+           page out from under you. allow-scripts + allow-same-origin are what the
+           players actually need to run. Overlay ads INSIDE the frame are
+           cross-origin and can only be removed by a browser content blocker. -->
+      <iframe id="pframe" allowfullscreen
+              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock"
+              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+              referrerpolicy="no-referrer" style="display:none"></iframe>
       <div class="ploading on" id="ploading">Finding the best source…</div>
       <div class="upnext" id="pupnext"></div>
     </div>
@@ -286,13 +294,20 @@ const yearOf = (it)=> (it.release_date||it.first_air_date||'').slice(0,4);
 const esc = (s)=> String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // Provider embed builders (mirror the apps).
+/* Embed providers, synced with the apps' verified set (StreamProvider.swift).
+   Tested from here: embed.su and player.autoembed.cc no longer resolve at all,
+   iframe.pstream.org is a PARKED domain serving ads, and vidfast.pro is a 301 to
+   vidfast.vc — all four were still being offered here long after the apps
+   dropped them, which is why "some sources don't work". The three VidSrc mirrors
+   the apps use were never offered on the web at all; they answer 200. */
 const PROVIDERS = [
   ['vidlink','VidLink',(t,k,s,e)=> k==='movie'?\`https://vidlink.pro/movie/\${t}?autoplay=true&title=false&primaryColor=43e048\`:\`https://vidlink.pro/tv/\${t}/\${s}/\${e}?autoplay=true&title=false&primaryColor=43e048\`],
   ['vidsrccc','VidSrc.cc',(t,k,s,e)=> k==='movie'?\`https://vidsrc.cc/v2/embed/movie/\${t}\`:\`https://vidsrc.cc/v2/embed/tv/\${t}/\${s}/\${e}\`],
-  ['embedsu','Embed.su',(t,k,s,e)=> k==='movie'?\`https://embed.su/embed/movie/\${t}\`:\`https://embed.su/embed/tv/\${t}/\${s}/\${e}\`],
-  ['autoembed','AutoEmbed',(t,k,s,e)=> k==='movie'?\`https://player.autoembed.cc/embed/movie/\${t}\`:\`https://player.autoembed.cc/embed/tv/\${t}/\${s}/\${e}\`],
-  ['vidfast','VidFast',(t,k,s,e)=> k==='movie'?\`https://vidfast.pro/movie/\${t}?autoPlay=true\`:\`https://vidfast.pro/tv/\${t}/\${s}/\${e}?autoPlay=true\`],
-  ['pstream','P-Stream',(t,k,s,e)=> k==='movie'?\`https://iframe.pstream.org/embed/tmdb-movie-\${t}\`:\`https://iframe.pstream.org/embed/tmdb-tv-\${t}/\${s}/\${e}\`],
+  ['vidfast','VidFast',(t,k,s,e)=> k==='movie'?\`https://vidfast.vc/movie/\${t}?autoPlay=true\`:\`https://vidfast.vc/tv/\${t}/\${s}/\${e}?autoPlay=true\`],
+  // The VidSrc mirror family shares one embed API: /embed/{movie,tv}?tmdb=&season=&episode=
+  ['vidsrcme','VidSrc',(t,k,s,e)=> k==='movie'?\`https://vidsrcme.ru/embed/movie?tmdb=\${t}&autoplay=1\`:\`https://vidsrcme.ru/embed/tv?tmdb=\${t}&season=\${s}&episode=\${e}&autoplay=1\`],
+  ['vidsrcme2','VidSrc 2',(t,k,s,e)=> k==='movie'?\`https://vidsrc2.ru/embed/movie?tmdb=\${t}&autoplay=1\`:\`https://vidsrc2.ru/embed/tv?tmdb=\${t}&season=\${s}&episode=\${e}&autoplay=1\`],
+  ['vidsrcme3','VidSrc 3',(t,k,s,e)=> k==='movie'?\`https://vidsrcme.su/embed/movie?tmdb=\${t}&autoplay=1\`:\`https://vidsrcme.su/embed/tv?tmdb=\${t}&season=\${s}&episode=\${e}&autoplay=1\`],
 ];
 
 // localStorage watch state
@@ -505,12 +520,21 @@ function play(it,kind,s,e){ pCtx={it,kind,s,e}; resumeAt=savedPos(it.id,kind,s,e
   setLoading(true,'Checking debrid for a clean HD stream…');
   setHint('');
   document.getElementById('player').classList.add('open');
-  resolveDebrid(it,kind,s,e).then(res=>{
+  resolveDebrid(it,kind,s,e).then(async res=>{
     // Ignore a resolve that finished after the user moved to a different title/episode.
     if(!pCtx || pCtx.it.id!==it.id || pCtx.s!==s || pCtx.e!==e) return;
     pDebrid=res.streams; buildSources();
     if(pDebrid.length){ selectSource('rd:0'); }
-    else { selectSource(PROVIDERS[0][0]); setHint(debridWhy(res.reason)); }  // transparent about why
+    else {
+      // No debrid file. Try the ad-free extractor tier before falling back to an
+      // embed, whose ads we provably cannot block from here.
+      const why=debridWhy(res.reason);
+      setHint(why+' Trying an ad-free source…');
+      await resolveDirect();
+      buildSources();
+      if(pDirect.length){ selectSource('dx:0'); }
+      else { selectSource(PROVIDERS[0][0]); setHint(why); }
+    }
   });
 }
 /* Browser can decode these CONTAINERS; anything else (mkv/avi/4K remux) is
@@ -594,9 +618,10 @@ function debridWhy(reason){
   return 'No browser-playable debrid file for this title (4K remux / mkv can\\'t play in a browser) — using an embed source. A browser ad blocker makes it ad-free.';
 }
 function buildSources(){ const sel=document.getElementById('psel');
+  const dx=pDirect.map((st,i)=>\`<option value="dx:\${i}">Ad-free · \${esc(st.label)}</option>\`).join('');
   const rd=pDebrid.map((st,i)=>\`<option value="rd:\${i}">Debrid · \${esc(st.label)}</option>\`).join('');
   const em=PROVIDERS.map(([id,name])=>\`<option value="\${id}">\${name} (embed)</option>\`).join('');
-  sel.innerHTML=rd+em; }
+  sel.innerHTML=dx+rd+em; }
 /* Silent-stream rescue.
    Screening release names catches the tagged Dolby/DTS files, but plenty of
    uploads simply don't say, and an mp4 with AC-3 inside plays picture with no
@@ -630,10 +655,47 @@ function rescueSilent(val){
   }
 }
 
+/* Ad-free tier.
+   The providers cannot be sandboxed (they detect it and refuse), so their popups
+   and overlays are untouchable from this page. The way out is to not load their
+   page at all: the extractor opens it server-side and hands back the underlying
+   stream, which plays in the same <video> element the debrid tier uses. Same
+   trick the iOS and TV apps use, now available here.
+   Bounded and best-effort — extraction takes seconds and can fail, so the embed
+   iframe stays as the fallback it always was. */
+let pDirect=[];
+async function resolveDirect(){
+  pDirect=[];
+  if(!pCtx) return;
+  const {it,kind,s,e}=pCtx;
+  // Two attempts, not the whole list: extraction took ~4s in testing, but a
+  // failing provider costs the full timeout, and nobody waits a minute to start
+  // a film. Two covers the common case without a worst case that feels broken.
+  for(const [id,name,build] of PROVIDERS.slice(0,2)){
+    try{
+      const embed=build(it.id,kind,s,e);
+      const r=await apiFetch('/api/resolve?embed='+encodeURIComponent(embed),
+                             {signal:AbortSignal.timeout(15000)});
+      const j=await r.json();
+      const play=j.play||j.url||j.stream;
+      if(play && /^https?:/i.test(play)){ pDirect.push({url:play, label:name}); return; }
+    }catch(_){ /* try the next provider */ }
+  }
+}
+
 function selectSource(val){ if(!pCtx) return;
   const sel=document.getElementById('psel'); sel.value=val;
   const vid=document.getElementById('pvideo'), fr=document.getElementById('pframe');
   setLoading(false);
+  if(val.startsWith('dx:')){ const st=pDirect[+val.slice(3)]; if(!st) return;
+    fr.style.display='none'; fr.src='about:blank';
+    setBadge(false); clearSilenceCheck();
+    vid.onerror=()=>onVideoError(val);
+    vid.style.display='';
+    playHls(vid, st.url);
+    setHint('<b>Ad-free</b> — the stream was pulled straight from '+esc(st.label)+' by your own server, so none of that site\\'s ads or popups load.');
+    return;
+  }
   if(val.startsWith('rd:')){ const st=pDebrid[+val.slice(3)]; if(!st) return;
     fr.style.display='none'; fr.src='about:blank';
     setBadge(true);
