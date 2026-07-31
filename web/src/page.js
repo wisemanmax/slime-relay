@@ -513,9 +513,16 @@ function play(it,kind,s,e){ pCtx={it,kind,s,e}; resumeAt=savedPos(it.id,kind,s,e
     else { selectSource(PROVIDERS[0][0]); setHint(debridWhy(res.reason)); }  // transparent about why
   });
 }
-/* Browser can decode these; anything else (mkv/avi/4K remux) is skipped. Mirrors
-   WEB_PLAYABLE in the worker — keep the two in step. */
+/* Browser can decode these CONTAINERS; anything else (mkv/avi/4K remux) is
+   skipped. Mirrors WEB_PLAYABLE in the worker — keep the two in step. */
 const WEB_PLAYABLE=/\\.(mp4|webm|mov|m4v)$/i;
+
+/* Container was never the whole story. An mp4 carrying Dolby Digital (AC-3),
+   DD+/E-AC-3, DTS, TrueHD or Atmos plays PICTURE with no sound in a browser —
+   which is what "debrid has no audio" turned out to be. Apple's players decode
+   these happily, so the iOS and TV apps are unaffected; only the web is.
+   Release names carry the tag, so screen on it. */
+const WEB_DEAD_AUDIO=/\\b(ddp?[0-9]|dd\\+|e-?ac-?3|ac-?3|dts(-hd|-?ma)?|truehd|atmos|flac)\\b/i;
 function qualityOf(t){ t=String(t).toLowerCase();
   if(/2160|\\b4k\\b|uhd/.test(t)) return 2160;
   if(/1440/.test(t)) return 1440;
@@ -527,17 +534,19 @@ function shortName(fn){ return String(fn).replace(/\\.[^.]+$/,'').replace(/[._]+
 
 /* Torrentio's response → the player's source list. Same rules as the worker. */
 function pickDebridStreams(data){
-  const out=[];
+  const out=[]; let dropped=0;   // surround-audio files skipped, for an honest message
   for(const x of (data&&data.streams)||[]){
     const fn=(x.behaviorHints&&x.behaviorHints.filename)||x.title||x.name||'';
     const txt=(x.name||'')+' '+(x.title||'');
     if(!x.url||!/^https?:/i.test(x.url)) continue;   // not a cached direct link
-    if(!WEB_PLAYABLE.test(fn)) continue;             // browser can't decode it
+    if(!WEB_PLAYABLE.test(fn)) continue;             // browser can't decode the container
+    if(WEB_DEAD_AUDIO.test(txt)) { dropped++; continue; }   // plays silent in a browser
     if(/download/i.test(txt)) continue;              // Torrentio marks uncached RD "download"
     const q=qualityOf(txt);
     out.push({url:x.url, quality:q, label:(q?q+'p':'SD')+' · '+shortName(fn)});
   }
   out.sort((a,b)=>b.quality-a.quality);
+  out.silentDropped=dropped;
   return out.slice(0,10);
 }
 
@@ -563,7 +572,7 @@ async function resolveDebrid(it,kind,s,e){
       if(r.ok){
         const streams=pickDebridStreams(await r.json());
         if(streams.length) return {streams, reason:''};
-        return {streams:[], reason:'none-playable'};
+        return {streams:[], reason: streams.silentDropped ? 'silent-audio' : 'none-playable'};
       }
     }
   }catch(e){ /* fall through to the Worker route below */ }
@@ -580,6 +589,7 @@ function debridWhy(reason){
   if(reason==='bad-key') return 'Your saved Real-Debrid key looks malformed — <b onclick="openSettings()" style="cursor:pointer;text-decoration:underline">re-enter it</b>. Using an embed source.';
   if(reason==='no-imdb') return 'Debrid couldn\\'t match this title — using an embed source.';
   if(reason==='none-playable') return 'Debrid has this title, but only in containers a browser can\\'t play (mkv / 4K remux) — using an embed source.';
+  if(reason==='silent-audio') return 'Debrid has this title, but only with surround audio (Dolby / DTS) that browsers can\\'t decode — it would play silent, so using an embed source.';
   if(reason&&reason.indexOf('torrentio')===0) return 'Debrid source unreachable ('+esc(reason)+') — using an embed source.';
   return 'No browser-playable debrid file for this title (4K remux / mkv can\\'t play in a browser) — using an embed source. A browser ad blocker makes it ad-free.';
 }
@@ -587,6 +597,39 @@ function buildSources(){ const sel=document.getElementById('psel');
   const rd=pDebrid.map((st,i)=>\`<option value="rd:\${i}">Debrid · \${esc(st.label)}</option>\`).join('');
   const em=PROVIDERS.map(([id,name])=>\`<option value="\${id}">\${name} (embed)</option>\`).join('');
   sel.innerHTML=rd+em; }
+/* Silent-stream rescue.
+   Screening release names catches the tagged Dolby/DTS files, but plenty of
+   uploads simply don't say, and an mp4 with AC-3 inside plays picture with no
+   sound. Two signals, both cheap: Safari exposes audioTracks (an empty list means
+   nothing decodable) and webkitAudioDecodedByteCount (stuck at 0 while playing
+   means no audio is being produced). Checked a few seconds IN, because both read
+   zero before the first frames decode. */
+let silenceTimer=null;
+function clearSilenceCheck(){ clearTimeout(silenceTimer); silenceTimer=null; }
+function scheduleSilenceCheck(val){
+  clearSilenceCheck();
+  silenceTimer=setTimeout(()=>{
+    const vid=document.getElementById('pvideo');
+    if(!vid||vid.paused||vid.muted||vid.volume===0) return;   // user's own doing, not the file
+    const noTrack = vid.audioTracks && vid.audioTracks.length===0;
+    const noBytes = typeof vid.webkitAudioDecodedByteCount==='number'
+                 && vid.webkitAudioDecodedByteCount===0 && vid.currentTime>1;
+    if(noTrack||noBytes) rescueSilent(val);
+  },4500);
+}
+function rescueSilent(val){
+  // Move to the next debrid candidate if there is one; otherwise an embed, which
+  // at least has sound. Silent video is worse than a lower-quality source.
+  const i = val.indexOf('rd:')===0 ? +val.slice(3) : -1;
+  if(i>=0 && pDebrid[i+1]){
+    setHint('That debrid file had audio this browser can\\'t decode (Dolby/DTS) — switched to the next one.');
+    selectSource('rd:'+(i+1));
+  } else {
+    setHint('That debrid file had audio this browser can\\'t decode (Dolby/DTS), and no other debrid file is playable here — using an embed source.');
+    selectSource(PROVIDERS[0][0]);
+  }
+}
+
 function selectSource(val){ if(!pCtx) return;
   const sel=document.getElementById('psel'); sel.value=val;
   const vid=document.getElementById('pvideo'), fr=document.getElementById('pframe');
@@ -595,13 +638,17 @@ function selectSource(val){ if(!pCtx) return;
     fr.style.display='none'; fr.src='about:blank';
     setBadge(true);
     vid.onerror=()=>onVideoError(val);
+    // A release name doesn't always admit its audio codec, so verify once
+    // playback is actually running (see checkSilence).
+    vid.onplaying=()=>scheduleSilenceCheck(val);
     // Resume where you left off (skip if we're basically at the start or the very end).
     vid.onloadedmetadata=()=>{ if(resumeAt>30 && resumeAt < (vid.duration||1e9)-60){ try{ vid.currentTime=resumeAt; }catch(_){} } };
     vid.style.display=''; vid.src=st.url; vid.play().catch(()=>{});
     setHint('<b>Debrid HD</b> — direct stream from your Real-Debrid account, no ads. If it won\\'t play, pick another source.');
   } else {
     setBadge(false);
-    vid.onerror=null; vid.onloadedmetadata=null; vid.pause(); vid.removeAttribute('src'); vid.load(); vid.style.display='none';
+    clearSilenceCheck();
+    vid.onerror=null; vid.onloadedmetadata=null; vid.onplaying=null; vid.pause(); vid.removeAttribute('src'); vid.load(); vid.style.display='none';
     fr.style.display=''; loadFrame(val);
     setHint('Ads come from the embed source — a browser ad blocker (uBlock Origin) makes it ad-free.');
   }
@@ -625,7 +672,7 @@ function switchProvider(){ selectSource(document.getElementById('psel').value); 
 function setLoading(on,msg){ const l=document.getElementById('ploading');
   if(msg) l.textContent=msg; l.classList.toggle('on',!!on); }
 function setHint(html){ document.getElementById('phint').innerHTML=html; }
-function closePlayer(){ const vid=document.getElementById('pvideo');
+function closePlayer(){ clearSilenceCheck(); const vid=document.getElementById('pvideo');
   if(pCtx && vid.currentTime>0) saveProgress(vid.currentTime, vid.duration);  // remember where you stopped
   if(hls){ hls.destroy(); hls=null; }   // tear down the live HLS engine
   document.getElementById('player').classList.remove('open');
