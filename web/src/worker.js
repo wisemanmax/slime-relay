@@ -75,6 +75,16 @@ export default {
     // EXTRACTOR_BASE = https://slime.byheir.com. The resolved play URL still
     // carries the token in its query (the browser's hls.js fetches the m3u8
     // directly, cross-origin — the extractor sends Access-Control-Allow-Origin:*).
+    /* The owner's default Real-Debrid token, if one is configured as a secret.
+       Sits BELOW the auth gate, so it is only ever handed to a signed-in session
+       and never appears in the page source. The browser needs the key in hand
+       because it queries Torrentio directly (Worker egress gets blocked), so this
+       is the same exposure as pasting it into Settings — just automatic, and
+       stored server-side instead of only in one browser. */
+    if (url.pathname === '/api/rdkey') {
+      return json({ key: (env.RD_KEY || '').trim() });
+    }
+
     /* Ad-free tier. The embed providers monetise through popups and actively
        refuse to run in a sandboxed iframe ("Please Disable Sandbox"), so their
        ads cannot be blocked from this side. The extractor already solves this

@@ -574,8 +574,19 @@ function pickDebridStreams(data){
   return out.slice(0,10);
 }
 
+/* Seed the debrid key from the site's own secret, so a new browser, a cleared
+   cache or a second device doesn't mean pasting a token again. A key the user
+   entered themselves always wins — this only fills a blank. */
+async function seedRdKey(){
+  if(getRdKey()) return;
+  try{ const r=await apiFetch('/api/rdkey'); const j=await r.json();
+    if(j && j.key) save('sw_rdkey', j.key); }catch(_){}
+}
+
 async function resolveDebrid(it,kind,s,e){
-  const key=getRdKey(); if(!key) return {streams:[],reason:'no-key'};   // BYO: no key → skip the round-trip
+  let key=getRdKey();
+  if(!key){ await seedRdKey(); key=getRdKey(); }
+  if(!key) return {streams:[],reason:'no-key'};   // still nothing → skip the round-trip
 
   /* Ask Torrentio from the BROWSER first.
      The Worker route kept failing with a torrentio-* status while the same
@@ -868,6 +879,7 @@ function route(){ const h=location.hash.slice(1)||'home';
   else if(base==='list') viewMyList();
   else viewHome();
 }
+seedRdKey();   // fills a blank key from the site secret, before anything plays
 window.addEventListener('hashchange', route);
 
 let sTimer=null;
