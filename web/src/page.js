@@ -254,13 +254,13 @@ export const PAGE = `<!doctype html>
     </div>
     <div class="stage">
       <video id="pvideo" controls playsinline preload="auto" style="display:none"></video>
-      <!-- sandbox is the real popup blocker. Omitting allow-popups stops the embed
-           opening ad tabs; omitting allow-top-navigation stops it redirecting this
-           page out from under you. allow-scripts + allow-same-origin are what the
-           players actually need to run. Overlay ads INSIDE the frame are
-           cross-origin and can only be removed by a browser content blocker. -->
+      <!-- NO sandbox attribute, deliberately. Tested: VidLink and VidFast detect it
+           and render "Please Disable Sandbox" instead of playing, and VidFast
+           refuses even the narrow form that keeps allow-popups. These providers
+           monetise through popups, so blocking them blocks playback. Ads are
+           dealt with by NOT loading their page — the ad-free extractor tier — and
+           by a browser content blocker for the times an embed is the only option. -->
       <iframe id="pframe" allowfullscreen
-              sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock"
               allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
               referrerpolicy="no-referrer" style="display:none"></iframe>
       <div class="ploading on" id="ploading">Finding the best source…</div>
