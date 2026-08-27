@@ -80,6 +80,25 @@ export const PAGE = `<!doctype html>
 
   .empty{color:var(--dim);text-align:center;padding:80px 20px}
 
+  /* Channel tiles + genre bar */
+  .track.chips{align-items:stretch}
+  .chip{flex:0 0 auto;width:172px;height:96px;border-radius:12px;cursor:pointer;
+    display:grid;place-items:center;padding:10px;text-align:center;
+    border:1px solid var(--line);transition:transform .18s,border-color .18s}
+  .chip span{font-weight:800;font-size:15px;letter-spacing:.3px;color:#fff}
+  .chip:hover{transform:translateY(-3px);border-color:var(--accent)}
+  .chipgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(172px,1fr));
+    gap:14px;padding:8px 40px 20px}
+  .chipgrid .chip{width:auto}
+  .chead{padding:26px 40px 22px;margin-bottom:6px;border-bottom:1px solid var(--line)}
+  .chead h1{margin:0;font-size:30px;font-weight:900}
+  .chead p{margin:6px 0 0;color:var(--dim);font-size:14px}
+  .genrebar{display:flex;gap:8px;overflow-x:auto;padding:16px 40px 4px;scrollbar-width:none}
+  .genrebar button{flex:0 0 auto;background:var(--panel);border:1px solid var(--line);
+    color:var(--dim);padding:7px 15px;border-radius:20px;font-size:13.5px;font-weight:600;cursor:pointer}
+  .genrebar button.on{background:var(--accent);color:#04170e;border-color:var(--accent)}
+  .genrebar button:hover:not(.on){color:var(--txt)}
+
   /* Detail modal */
   .modal{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);
     display:none;overflow-y:auto}
@@ -187,6 +206,14 @@ export const PAGE = `<!doctype html>
     .card img,.card .ph{width:112px;height:168px;border-radius:8px}
     .card .t{font-size:12px;margin-top:6px}
     .grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:14px;padding:14px 16px}
+
+    /* Channel tiles + genre bar at phone scale */
+    .chip{width:138px;height:76px}
+    .chip span{font-size:13.5px}
+    .chipgrid{grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:12px;padding:8px 16px 18px}
+    .chead{padding:18px 16px 16px}
+    .chead h1{font-size:23px}
+    .genrebar{padding:12px 16px 4px}
 
     /* Room for the floating bar */
     main{padding-bottom:104px}
@@ -299,16 +326,62 @@ const esc = (s)=> String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>
    iframe.pstream.org is a PARKED domain serving ads, and vidfast.pro is a 301 to
    vidfast.vc — all four were still being offered here long after the apps
    dropped them, which is why "some sources don't work". The three VidSrc mirrors
-   the apps use were never offered on the web at all; they answer 200. */
+   the apps use were never offered on the web at all; they answer 200.
+
+   vidsrc.cc removed 2026-08-27: it answers 403 with a 5.5 KB block page for
+   every title (measured here, and the apps dropped it the day before for the
+   same reason). Offering a source that can only fail is worse than offering one
+   fewer — it costs the viewer a rung and reads as "the site is broken". */
 const PROVIDERS = [
   ['vidlink','VidLink',(t,k,s,e)=> k==='movie'?\`https://vidlink.pro/movie/\${t}?autoplay=true&title=false&primaryColor=43e048\`:\`https://vidlink.pro/tv/\${t}/\${s}/\${e}?autoplay=true&title=false&primaryColor=43e048\`],
-  ['vidsrccc','VidSrc.cc',(t,k,s,e)=> k==='movie'?\`https://vidsrc.cc/v2/embed/movie/\${t}\`:\`https://vidsrc.cc/v2/embed/tv/\${t}/\${s}/\${e}\`],
   ['vidfast','VidFast',(t,k,s,e)=> k==='movie'?\`https://vidfast.vc/movie/\${t}?autoPlay=true\`:\`https://vidfast.vc/tv/\${t}/\${s}/\${e}?autoPlay=true\`],
   // The VidSrc mirror family shares one embed API: /embed/{movie,tv}?tmdb=&season=&episode=
   ['vidsrcme','VidSrc',(t,k,s,e)=> k==='movie'?\`https://vidsrcme.ru/embed/movie?tmdb=\${t}&autoplay=1\`:\`https://vidsrcme.ru/embed/tv?tmdb=\${t}&season=\${s}&episode=\${e}&autoplay=1\`],
   ['vidsrcme2','VidSrc 2',(t,k,s,e)=> k==='movie'?\`https://vidsrc2.ru/embed/movie?tmdb=\${t}&autoplay=1\`:\`https://vidsrc2.ru/embed/tv?tmdb=\${t}&season=\${s}&episode=\${e}&autoplay=1\`],
   ['vidsrcme3','VidSrc 3',(t,k,s,e)=> k==='movie'?\`https://vidsrcme.su/embed/movie?tmdb=\${t}&autoplay=1\`:\`https://vidsrcme.su/embed/tv?tmdb=\${t}&season=\${s}&episode=\${e}&autoplay=1\`],
 ];
+
+/* ── Brand channels + genres (mirrors CatalogModels.swift) ────────────────────
+   The apps grew per-service browse screens; the web had no way to ask "what is
+   on Netflix". Same TMDB shape they use: with_watch_providers + a US flatrate
+   monetization filter, which is what makes the result the service's actual
+   catalog rather than everything it has ever touched.
+
+   2303 is Paramount+, NOT the retired 531 — a US flatrate discover on 531
+   returns zero rows, which is why that tile would open an empty channel. */
+const CHANNELS = [
+  [8,'Netflix','#2b1013'],[337,'Disney+','#101a2e'],[1899,'Max','#1e1430'],
+  [9,'Prime Video','#0c1e2a'],[350,'Apple TV+','#1d1d1f'],[15,'Hulu','#0d2418'],
+  [2303,'Paramount+','#0e1a2c'],[386,'Peacock','#241620'],
+  [283,'Crunchyroll','#2c1707'],[526,'AMC+','#1e1010'],
+];
+const chanName = (pid)=> (CHANNELS.find(c=>c[0]===+pid)||[0,'Channel'])[1];
+
+/* TMDB's movie and TV genre ids are DIFFERENT namespaces, and a wrong id is not
+   rejected — it silently returns an unfiltered grid. These are the movie ids;
+   they are only ever sent to /discover/movie. */
+const GENRES = [
+  [28,'Action'],[12,'Adventure'],[16,'Animation'],[35,'Comedy'],[80,'Crime'],
+  [99,'Documentary'],[18,'Drama'],[10751,'Family'],[14,'Fantasy'],[36,'History'],
+  [27,'Horror'],[10402,'Music'],[9648,'Mystery'],[10749,'Romance'],[878,'Sci-Fi'],
+  [10770,'TV Movie'],[53,'Thriller'],[10752,'War'],[37,'Western'],
+];
+
+/* Built from an object so an override REPLACES a default instead of appending a
+   second copy. TMDB rejects a duplicated parameter outright — "Invalid
+   parameters", zero results — and because a short row is dropped, the row then
+   vanishes silently rather than erroring. That is how the Top Rated shelf
+   disappeared: sort_by and vote_count.gte were each sent twice. */
+const provQ = (pid, extra)=> {
+  const q = Object.assign({
+    with_watch_providers: pid,
+    watch_region: 'US',
+    with_watch_monetization_types: 'flatrate',
+    sort_by: 'popularity.desc',
+    'vote_count.gte': '20',
+  }, extra || {});
+  return Object.entries(q).map(([k,v])=>\`\${k}=\${encodeURIComponent(v)}\`).join('&');
+};
 
 // localStorage watch state
 const load = (k,d)=> { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -334,17 +407,35 @@ function resumeItem(id,kind){ const rec=load('sw_continue',[]).find(x=>x.id===id
   play({id,media_type:kind,title:rec.title,poster_path:rec.poster,backdrop_path:rec.backdrop}, kind, rec.s||1, rec.e||1); }
 
 // ── Rendering ──
-const NAV = [['home','Home'],['movies','Movies'],['tv','TV'],['live','Live'],['anime','Anime'],['list','My List']];
+const NAV = [['home','Home'],['channels','Channels'],['movies','Movies'],['tv','TV'],
+             ['live','Live'],['anime','Anime'],['genre/28','Genres'],['list','My List']];
 function renderNav(active){ document.getElementById('nav').innerHTML =
-  NAV.map(([r,l])=>\`<a class="\${r===active?'on':''}" onclick="go('#\${r}')">\${l}</a>\`).join(''); }
+  // A nav entry may carry a route argument (genre/28); highlight on its base.
+  NAV.map(([r,l])=>\`<a class="\${r.split('/')[0]===active?'on':''}" onclick="go('#\${r}')">\${l}</a>\`).join(''); }
 
 function card(it){ const k=kindOf(it), p=IMG(it.poster_path,'w342');
   return \`<div class="card" onclick="openDetail(\${it.id},'\${k}')">\`+
     (p?\`<img loading="lazy" src="\${p}" alt="">\`:\`<div class="ph">▦</div>\`)+
     \`<div class="t">\${esc(titleOf(it))}</div></div>\`; }
 
-function row(title, items){ if(!items||!items.length) return '';
+/* A row is dropped below four items rather than rendered thin. The apps use the
+   same floor (TMDBService.loadChannel): a service that genuinely has two war
+   films should show no War row, not a shelf with a gap where the posters end. */
+const ROW_MIN = 4;
+function row(title, items){ if(!items||items.length<ROW_MIN) return '';
   return \`<div class="row"><h2>\${esc(title)}</h2><div class="track">\${items.map(card).join('')}</div></div>\`; }
+
+// Service tiles. Text on a brand tint rather than logos: TMDB's logo paths need
+// a second lookup per service and 404 individually, and a missing logo makes a
+// tile unidentifiable, whereas a missing tint is merely plainer.
+function chanTile(pid,name,tint){
+  return \`<div class="chip" style="background:\${tint}" onclick="go('#channel/\${pid}')">
+    <span>\${esc(name)}</span></div>\`;
+}
+function rowChannels(){
+  return \`<div class="row"><h2>Channels</h2><div class="track chips">\`+
+    CHANNELS.map(([p,n,t])=>chanTile(p,n,t)).join('')+\`</div></div>\`;
+}
 
 let heroItems=[], heroI=0, heroTimer=null;
 function renderHero(items){ heroItems=items.filter(x=>x.backdrop_path).slice(0,6); heroI=0;
@@ -391,10 +482,11 @@ async function viewHome(){ const main=document.getElementById('main'); main.inne
   const list=myList().map(c=>({id:c.id,media_type:c.kind,title:c.title,poster_path:c.poster}));
   if(list.length) out+=row('My List', list);
   out+=row('Trending This Week', trItems);
-  out+=row('Popular Movies', pm?.results);
-  out+=row('Popular TV', pt?.results);
-  out+=row('Anime', anime?.results);
-  out+=row('Action', action?.results);
+  out+=rowChannels();
+  out+=row('Popular Movies', (pm?.results||[]).map(x=>({...x,media_type:'movie'})));
+  out+=row('Popular TV', (pt?.results||[]).map(x=>({...x,media_type:'tv'})));
+  out+=row('Anime', (anime?.results||[]).map(x=>({...x,media_type:'tv'})));
+  out+=row('Action', (action?.results||[]).map(x=>({...x,media_type:'movie'})));
   main.innerHTML=out; paintHero();
 }
 function rowResume(items){ return \`<div class="row"><h2>Continue Watching</h2><div class="track">\`+
@@ -412,6 +504,52 @@ async function viewList(kind, title, endpoints){ const main=document.getElementB
   let out=''; endpoints.forEach((e,i)=>{ out+=row(e.label, (res[i]?.results||[]).map(x=>({...x,media_type:kind}))); });
   main.innerHTML=out||'<div class="empty">Nothing here.</div>';
 }
+/* One service's catalog: the blend, then each kind, then every genre that
+   actually has enough titles. Rows are fetched together and rendered in a fixed
+   order, so a slow genre cannot reorder the page under the viewer. */
+async function viewChannel(pid){
+  const main=document.getElementById('main'); const name=chanName(pid);
+  main.innerHTML='<div class="empty">Loading '+esc(name)+'…</div>';
+  const specs=[
+    {label:'Popular on '+name, path:\`discover/movie?\${provQ(pid)}\`, kind:'movie'},
+    {label:'Series',           path:\`discover/tv?\${provQ(pid)}\`,    kind:'tv'},
+    {label:'Top Rated',        path:\`discover/movie?\${provQ(pid,{sort_by:'vote_average.desc','vote_count.gte':'200'})}\`, kind:'movie'},
+    ...GENRES.map(([g,l])=>({label:l, path:\`discover/movie?\${provQ(pid,{with_genres:g})}\`, kind:'movie'})),
+  ];
+  const res=await Promise.all(specs.map(s=>api(s.path)));
+  let out=\`<div class="chead" style="background:\${(CHANNELS.find(c=>c[0]===+pid)||[0,0,'#151515'])[2]}">
+      <h1>\${esc(name)}</h1><p>Everything streaming on \${esc(name)} right now.</p></div>\`;
+  specs.forEach((s,i)=>{ out+=row(s.label,(res[i]?.results||[]).map(x=>({...x,media_type:s.kind}))); });
+  // Only the header survived → every row was under the floor, which means the
+  // provider id returned nothing, not that the service is small.
+  main.innerHTML = /class="row"/.test(out) ? out
+    : '<div class="empty">Nothing streaming on '+esc(name)+' right now.</div>';
+}
+
+function viewChannels(){
+  document.getElementById('main').innerHTML =
+    \`<div class="row"><h2>Channels</h2></div><div class="chipgrid">\`+
+    CHANNELS.map(([p,n,t])=>chanTile(p,n,t)).join('')+\`</div>\`;
+}
+
+/* Genre browse. Movie ids only, against /discover/movie — see GENRES. */
+async function viewGenre(gid){
+  const main=document.getElementById('main');
+  const label=(GENRES.find(g=>g[0]===+gid)||[0,'Genre'])[1];
+  main.innerHTML='<div class="empty">Loading '+esc(label)+'…</div>';
+  const chips=GENRES.map(([g,l])=>
+    \`<button class="\${+g===+gid?'on':''}" onclick="go('#genre/\${g}')">\${l}</button>\`).join('');
+  const [pop,top]=await Promise.all([
+    api(\`discover/movie?with_genres=\${gid}&sort_by=popularity.desc&vote_count.gte=40\`),
+    api(\`discover/movie?with_genres=\${gid}&sort_by=vote_average.desc&vote_count.gte=300\`),
+  ]);
+  const items=(pop?.results||[]).map(x=>({...x,media_type:'movie'}));
+  main.innerHTML=\`<div class="genrebar">\${chips}</div>\`+
+    (items.length?\`<div class="grid">\${items.map(card).join('')}</div>\`
+                 :'<div class="empty">Nothing in '+esc(label)+'.</div>')+
+    row('Top Rated '+label,(top?.results||[]).map(x=>({...x,media_type:'movie'})));
+}
+
 async function viewMyList(){ const main=document.getElementById('main');
   const l=myList().map(c=>({id:c.id,media_type:c.kind,title:c.title,poster_path:c.poster}));
   main.innerHTML = l.length ? \`<div class="grid">\${l.map(card).join('')}</div>\` :
@@ -820,8 +958,10 @@ function renderPills(active){
 
 function renderTabbar(active){
   const el=document.getElementById('tabbar'); if(!el) return;
-  // Movies/Series/Anime are pill routes, so they keep Home lit in the bar.
-  const tab = ['movies','tv','anime'].includes(active) ? 'home' : active;
+  // Movies/Series/Anime are pill routes, and the channel/genre surfaces are
+  // reached FROM Home, so all of them keep Home lit rather than leaving the bar
+  // with nothing highlighted.
+  const tab = ['movies','tv','anime','channels','channel','genre'].includes(active) ? 'home' : active;
   el.innerHTML = M_TABS.map(([r,g,l]) =>
     \`<button class="\${r===tab?'on':''}" onclick="go('#\${r}')">\
 <span class="g">\${g}</span>\${l}</button>\`).join('');
@@ -859,13 +999,19 @@ async function searchInto(q, targetID){
 function route(){ const h=location.hash.slice(1)||'home';
   closeDetail();
   const base=h.split('/')[0];
-  const known=['home','movies','tv','live','anime','list','search'];
+  const arg=h.split('/')[1];
+  const known=['home','movies','tv','live','anime','list','search','channels','channel','genre'];
+  // A channel/genre page is a browse surface, so it lights the Channels tab
+  // rather than falling back to Home and leaving nothing highlighted.
   const active=known.includes(base)?base:'home';
   renderNav(active==='search'?'home':active);
   renderPills(active);
   renderTabbar(active);
   if(base==='search') viewSearchScreen();
   else if(base==='home') viewHome();
+  else if(base==='channels') viewChannels();
+  else if(base==='channel') viewChannel(arg);
+  else if(base==='genre') viewGenre(arg);
   else if(base==='live') viewLive();
   else if(base==='movies') viewList('movie','Movies',[
     {path:'movie/popular',label:'Popular'},{path:'movie/top_rated',label:'Top Rated'},
