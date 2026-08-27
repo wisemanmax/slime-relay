@@ -277,6 +277,7 @@ export const PAGE = `<!doctype html>
       <span class="pbadge" id="pbadge" style="display:none">⚡ DEBRID</span>
       <label style="color:var(--dim);font-size:13px">Source</label>
       <select id="psel" onchange="switchProvider()"></select>
+      <button class="x" id="pfs" onclick="toggleFullscreen()" title="Fullscreen (f)">⛶ Fullscreen</button>
       <button class="x" onclick="closePlayer()">✕ Close</button>
     </div>
     <div class="stage">
@@ -864,6 +865,57 @@ function selectSource(val){ if(!pCtx) return;
     setHint('Ads come from the embed source — a browser ad blocker (uBlock Origin) makes it ad-free.');
   }
 }
+/* ── Fullscreen ───────────────────────────────────────────────────────────────
+   There was no fullscreen control of our own, so it depended entirely on
+   whichever player happened to be inside: the <video> tag's native controls on
+   the debrid/ad-free path, and the provider's own button on the embed path —
+   which is unreachable while an embed is still loading or sitting on an ad.
+
+   Fullscreen the STAGE, not the video: the stage holds both the <video> and the
+   iframe, so one control covers both paths. iPhone is the exception — it refuses
+   fullscreen for arbitrary elements and only allows it on the media element
+   itself, so fall back to webkitEnterFullscreen when the video is the visible
+   path. If neither exists there is nothing honest to do but say so. */
+function fsActive(){ return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+function toggleFullscreen(){
+  if(fsActive()){
+    const exit=document.exitFullscreen||document.webkitExitFullscreen;
+    if(exit) try{ exit.call(document); }catch(_){}
+    return;
+  }
+  const st=document.querySelector('#player .stage');
+  const v=document.getElementById('pvideo');
+  // Only the media element can go fullscreen on iPhone, and only when it is the
+  // visible path (the debrid / ad-free tiers) — never for an embed iframe.
+  const viaVideo=()=>{
+    if(v && v.style.display!=='none' && v.webkitEnterFullscreen){
+      try{ v.webkitEnterFullscreen(); return true; }catch(_){}
+    }
+    return false;
+  };
+  const denied=()=>{ if(!viaVideo()) setHint('This browser blocked fullscreen — use the player\\'s own control.'); };
+
+  if(st&&st.requestFullscreen){
+    // The rejection MUST be handled, not swallowed. Element fullscreen is
+    // refused outright by iPhone Safari and by embedded webviews with no window
+    // manager (observed: "TypeError: Permissions check failed" while every
+    // capability check — fullscreenEnabled, featurePolicy — still reported
+    // true). A bare .catch(()=>{}) turns all of that into a button that looks
+    // broken, so fall through to the media element and then say so.
+    st.requestFullscreen().catch(denied);
+    return;
+  }
+  if(st&&st.webkitRequestFullscreen){ try{ st.webkitRequestFullscreen(); return; }catch(_){} }
+  if(viaVideo()) return;
+  denied();
+}
+function syncFsButton(){
+  const b=document.getElementById('pfs'); if(!b) return;
+  b.textContent = fsActive() ? '⛶ Exit' : '⛶ Fullscreen';
+}
+document.addEventListener('fullscreenchange', syncFsButton);
+document.addEventListener('webkitfullscreenchange', syncFsButton);
+
 function setBadge(on){ document.getElementById('pbadge').style.display=on?'':'none'; }
 function showUpNext(html){ const u=document.getElementById('pupnext'); u.innerHTML=html; u.classList.add('on'); }
 function hideUpNext(){ document.getElementById('pupnext').classList.remove('on'); }
@@ -1032,7 +1084,19 @@ let sTimer=null;
 document.getElementById('q').addEventListener('input', e=>{ clearTimeout(sTimer); const q=e.target.value.trim();
   sTimer=setTimeout(()=>{ renderNav(''); viewSearch(q); }, 300); });
 
-document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closePlayer(); closeDetail(); closeSettings(); } });
+document.addEventListener('keydown', e=>{
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target&&e.target.tagName)||'');
+  if(e.key==='Escape'){
+    // The browser exits fullscreen on Escape by itself. Closing the player in
+    // the same keystroke would end playback when all the viewer asked for was
+    // the window back, so let that Escape be consumed by leaving fullscreen.
+    if(fsActive()) return;
+    closePlayer(); closeDetail(); closeSettings(); return;
+  }
+  if(typing) return;
+  const playerOpen=document.getElementById('player').classList.contains('open');
+  if(playerOpen && (e.key==='f'||e.key==='F')){ e.preventDefault(); toggleFullscreen(); }
+});
 
 route();
 </script>
