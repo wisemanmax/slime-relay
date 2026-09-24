@@ -22,6 +22,9 @@
 //   GET  /pick            single best enabled server (admin) -> { server }
 //   POST /admin/action    { action:'disable'|'enable'|'prefer'|'unprefer', id } (admin)
 //   GET  /                dashboard (admin) — status + controls
+//   POST /assist          the apps' "Ask" assistant (user|admin) — see assist.js
+
+import { handleAssist } from './assist.js';
 
 const HEARTBEAT_TTL = 90;
 const FRESH_MS = 60_000;
@@ -148,6 +151,11 @@ export default {
       if (!isAdmin) return json({ error: 'unauthorized' }, 401);
       const sessions = await presence(env);
       return json({ active: sessions.length, sessions });
+    }
+
+    // ── The "Ask" assistant: a DeepSeek proxy with the prompt and tools fixed here. ──
+    if (url.pathname === '/assist' && request.method === 'POST') {
+      return handleAssist(request, env, { isUser, clientIP, json, rateLimited });
     }
 
     // ── User routing: bare, ranked, enabled-only addresses. No metadata. ──
