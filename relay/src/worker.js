@@ -44,14 +44,17 @@ const PRESENCE_TTL = 120;
 // removing them here only stops handing the hosts out, it can't remove a rung.
 // Mirrors are chosen to serve directly: vidsrc-embed.ru and vsrc.su both 302 to
 // vsembed.ru, which would collapse two ladder rungs onto one origin.
+// 2026-09-26: VidSrc's official list (vidsrc.domains) is now vidsrc.sh (primary),
+// vidsrc2.ru and vidsrc.ir; vidsrcme.ru is "use new" and vidsrcme.su just 301s
+// to vidsrc.sh (so it duplicated the first rung's origin).
 const DEFAULT_PROVIDERS = {
   hosts: {
     vidlink: 'vidlink.pro',
     vidfast: 'vidfast.vc',
     vidsrccc: 'vidsrc.cc',
-    vidsrcme: 'vidsrcme.ru',
+    vidsrcme: 'vidsrc.sh',
     vidsrcme2: 'vidsrc2.ru',
-    vidsrcme3: 'vidsrcme.su',
+    vidsrcme3: 'vidsrc.ir',
   },
   animeHosts: {
     // tryembed is the working PRIMARY (verified 2026-07-25 in a real browser:
@@ -81,6 +84,43 @@ export default {
     // ── Provider domains (PUBLIC — just domain names, no auth). Apps fetch this
     // on launch so a rotated streaming domain is fixed here, not in a new build.
     // Merges the KV "providers" override (if set) over the baked defaults. ──
+    // ── Provider-domain rotation (server credential). The home extractor's
+    // domain watcher writes here after it has PROVEN a host plays (see
+    // SlimeWatchExtractor/lib/domainwatch.js). Only known provider ids, only
+    // well-formed hostnames; every write is appended to a history. ──
+    if (url.pathname === '/providers' && request.method === 'POST') {
+      if (!env.FLEET_TOKEN || !isFleet) return json({ error: 'unauthorized' }, 401);
+      if (await rateLimited(env, `prov:${clientIP}`, 20)) return json({ error: 'rate limited' }, 429);
+      let body; try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
+      const HOST_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
+      const clean = (src, allowed) => {
+        const out = {};
+        for (const [id, h] of Object.entries(src || {})) {
+          const host = String(h || '').trim().toLowerCase();
+          if (!(id in allowed) || !HOST_RE.test(host)) return null;
+          out[id] = host;
+        }
+        return out;
+      };
+      const hosts = clean(body?.hosts, DEFAULT_PROVIDERS.hosts);
+      const animeHosts = clean(body?.animeHosts, DEFAULT_PROVIDERS.animeHosts);
+      if (!hosts || !animeHosts) return json({ error: 'unknown provider id or bad host' }, 400);
+      if (!Object.keys(hosts).length && !Object.keys(animeHosts).length) return json({ error: 'nothing to set' }, 400);
+      let override = {};
+      try { override = JSON.parse(await env.SERVERS.get('providers') || '{}') || {}; } catch {}
+      const next = {
+        hosts: { ...(override.hosts || {}), ...hosts },
+        animeHosts: { ...(override.animeHosts || {}), ...animeHosts },
+      };
+      await env.SERVERS.put('providers', JSON.stringify(next));
+      let history = [];
+      try { history = JSON.parse(await env.SERVERS.get('providers:history') || '[]'); } catch {}
+      history.push({ at: new Date().toISOString(), hosts, animeHosts, reason: String(body?.reason || '').slice(0, 300) });
+      await env.SERVERS.put('providers:history', JSON.stringify(history.slice(-50)));
+      return json({ ok: true, hosts: { ...DEFAULT_PROVIDERS.hosts, ...next.hosts },
+                    animeHosts: { ...DEFAULT_PROVIDERS.animeHosts, ...next.animeHosts } });
+    }
+
     if (url.pathname === '/providers') {
       let override = null;
       try { const raw = await env.SERVERS.get('providers'); override = raw ? JSON.parse(raw) : null; } catch {}
