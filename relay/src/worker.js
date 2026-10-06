@@ -59,12 +59,17 @@ const DEFAULT_PROVIDERS = {
   animeHosts: {
     // tryembed is the working PRIMARY (verified 2026-07-25 in a real browser:
     // AniList 21 → ONE PIECE ep1 sub 24:37, AniList 16498 → ATTACK ON TITAN ep1
-    // dub with a loaded 1556s stream). vidsrc.cc's origin was 522-ing and
-    // vidsrc.icu is NXDOMAIN — both kept as overridable fallbacks so a revival
-    // is a KV edit, not a build.
+    // dub with a loaded 1556s stream).
+    // 2026-10-05 (docs/ANIME-SOURCING-REVIEW-2026-10-05.md §4, the extractor's
+    // headless Chromium, AoT ep1 + One Piece ep1120, sub and dub): vidnest.fun
+    // streamed in 0.8–1.9 s with the same encodes as tryembed (a second front
+    // on one catalog); anixo.buzz streamed once (own-domain mp4) and failed
+    // once — probationary, last. vidsrc.cc (522) and vidsrc.icu (NXDOMAIN) are
+    // dead and REMOVED: the apps clear an anime id this map stops naming, so
+    // every device drops those rungs. Re-adding one here brings it back.
     tryembed: 'tryembed.us.cc',
-    vidsrccc: 'vidsrc.cc',
-    vidsrcicu: 'vidsrc.icu',
+    vidnest: 'vidnest.fun',
+    anixo: 'anixo.buzz',
   },
 };
 
@@ -93,11 +98,15 @@ export default {
       if (await rateLimited(env, `prov:${clientIP}`, 20)) return json({ error: 'rate limited' }, 429);
       let body; try { body = await request.json(); } catch { return json({ error: 'bad json' }, 400); }
       const HOST_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
+      // An EMPTY host for a known id means "clear": stored as "" so GET hands
+      // out "" and the apps remove their override (a baked host falls back to
+      // its default, a relay-only one disappears). HOST_RE rejected "", which
+      // left no way to clear a host once set.
       const clean = (src, allowed) => {
         const out = {};
         for (const [id, h] of Object.entries(src || {})) {
           const host = String(h || '').trim().toLowerCase();
-          if (!(id in allowed) || !HOST_RE.test(host)) return null;
+          if (!(id in allowed) || (host !== '' && !HOST_RE.test(host))) return null;
           out[id] = host;
         }
         return out;
@@ -124,9 +133,14 @@ export default {
     if (url.pathname === '/providers') {
       let override = null;
       try { const raw = await env.SERVERS.get('providers'); override = raw ? JSON.parse(raw) : null; } catch {}
+      // Anime ids only while they are defaults: a KV override written before an
+      // id was retired (vidsrccc / vidsrcicu, 2026-10-05) must not keep handing
+      // the dead host out.
+      const animeOverride = Object.fromEntries(Object.entries(override?.animeHosts || {})
+        .filter(([id]) => id in DEFAULT_PROVIDERS.animeHosts));
       const cfg = {
         hosts: { ...DEFAULT_PROVIDERS.hosts, ...(override?.hosts || {}) },
-        animeHosts: { ...DEFAULT_PROVIDERS.animeHosts, ...(override?.animeHosts || {}) },
+        animeHosts: { ...DEFAULT_PROVIDERS.animeHosts, ...animeOverride },
       };
       return new Response(JSON.stringify(cfg), {
         headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*',
