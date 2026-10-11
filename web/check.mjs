@@ -23,6 +23,7 @@ import { runPlayerChecks } from './test/player.mjs';
 import { runReadingChecks } from './test/reading.mjs';
 import { runSyncChecks } from './test/sync.mjs';
 import { runAskChecks } from './test/ask.mjs';
+import { runProfilesChecks } from './test/profiles.mjs';
 
 let bad = 0;
 const fail = (m) => { console.error('FAIL:', m); bad = 1; };
@@ -67,7 +68,7 @@ const registered = new Set([...fresh.js.matchAll(/onAction\(\s*["']([a-z][a-z0-9
 for (const a of used) if (!registered.has(a)) fail(`data-act="${a}" is rendered but no onAction("${a}") handler is registered`);
 
 // ── 4. Structural smoke tests (phone layout + player chrome) ─────────────────────
-for (const marker of ['id="tabbar"', 'id="pills"', 'stagewrap', 'id="pvideo"', 'id="pframe"', 'id="psel"', 'id="ppip"', 'id="toasts"', 'rel="manifest"', 'apple-touch-icon', 'apple-mobile-web-app-capable', 'viewport-fit=cover']) {
+for (const marker of ['id="tabbar"', 'id="pick"', 'id="hdr-avatar"', 'id="hdr-me"', 'id="pills"', 'stagewrap', 'id="pvideo"', 'id="pframe"', 'id="psel"', 'id="ppip"', 'id="toasts"', 'rel="manifest"', 'apple-touch-icon', 'apple-mobile-web-app-capable', 'viewport-fit=cover']) {
   ok(PAGE.includes(marker), `missing expected markup: ${marker}`);
 }
 ok(/max-width:\s*700px/.test(PAGE), 'missing the phone layout media query (max-width: 700px)');
@@ -135,7 +136,7 @@ const call = (path, init) => worker.fetch(new Request('https://watch.example' + 
 }
 
 // ── 7. Unit checks: store/router/debrid, service worker, page-side update flow ──
-for (const [name, run] of [['unit', () => runUnitChecks()], ['sw', () => runSwChecks(sw ? sw.text : '')], ['pwa', () => runPwaChecks()], ['player', () => runPlayerChecks()], ['reading', () => runReadingChecks()], ['sync', () => runSyncChecks()], ['ask', () => runAskChecks()]]) {
+for (const [name, run] of [['unit', () => runUnitChecks()], ['sw', () => runSwChecks(sw ? sw.text : '')], ['pwa', () => runPwaChecks()], ['player', () => runPlayerChecks()], ['reading', () => runReadingChecks()], ['sync', () => runSyncChecks()], ['ask', () => runAskChecks()], ['profiles', () => runProfilesChecks()]]) {
   try { const n = await run(); console.log(`${name} — ${n} checks passed`); }
   catch (e) { fail(`${name} check: ` + (e && e.message)); if (e && e.stack) console.error(e.stack.split('\n').slice(1, 4).join('\n')); }
 }

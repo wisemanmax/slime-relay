@@ -1,4 +1,4 @@
-// Settings sheet: Connect Debrid (BYO Real-Debrid key, stored in this browser —
+// Settings sheet: who's watching (Switch profile), Connect Debrid (BYO Real-Debrid key, stored in this browser —
 // mirrors the iOS/tvOS flow), captions + anime audio prefs (synced), the home
 // server's reachability, sync status, "Install app" when the browser offers
 // it, and the build. The pref sections repaint in place, so a half-typed RD
@@ -11,6 +11,7 @@ import { syncStatus, onSyncStatus, syncNow } from '../sync.js';
 import { onAction } from './actions.js';
 import { installRowHTML } from './install.js';
 import { closeDetail } from '../views/detail.js';
+import { currentProfile, openProfiles, avatarHTML } from '../profiles.js';
 
 export const CAPTION_LANGS = [
   ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'],
@@ -28,6 +29,8 @@ export function openSettings() { const m = $('setmodal'), sh = $('setsheet');
   closeDetail(); m.classList.add('open'); const key = getRdKey();
   sh.innerHTML = `<div class="set">
     <div class="set-top"><h1>Settings</h1><button class="set-btn" data-act="settings-close">Done</button></div>
+
+    <section class="set-sec"><h2>Profile</h2><div id="set-profile">${profileHTML()}</div></section>
 
     <section class="set-sec">
       <h2>Debrid <span style="color:var(--accent)">HD</span></h2>
@@ -55,6 +58,15 @@ export function openSettings() { const m = $('setmodal'), sh = $('setsheet');
 }
 export function closeSettings() { $('setmodal').classList.remove('open'); if (offSync) { offSync(); offSync = null; } }
 export const isSettingsOpen = () => $('setmodal').classList.contains('open');
+
+/** Who's watching in this browser, and the way to the picker. */
+function profileHTML() {
+  const p = currentProfile();
+  return p
+    ? `<div class="set-prof">${avatarHTML(p, 'set-av')}<div><b>${esc(p.name)}</b><div class="set-note">My List, Continue Watching, reading and these settings are ${esc(p.name)}'s — on every browser where they pick their name.</div></div></div>
+      <button class="set-btn" data-act="profile-switch">Switch profile</button>`
+    : `<p class="set-note">No name picked in this browser.</p><button class="set-btn" data-act="profile-switch">Who's watching?</button>`;
+}
 
 const seg = (pref, options, current) => `<div class="set-seg" role="radiogroup">${options.map(([v, label]) =>
   `<button role="radio" aria-checked="${v === current}" class="${v === current ? 'on' : ''}" data-act="set-pref" data-pref="${pref}" data-val="${v}">${esc(label)}</button>`).join('')}</div>`;
@@ -92,11 +104,13 @@ function paintPrefs() {
 export function syncText(st, now = Date.now()) {
   const ago = (t) => { const s = Math.round((now - t) / 1000); return s < 10 ? 'just now' : s < 60 ? s + ' s ago' : s < 3600 ? Math.round(s / 60) + ' min ago' : Math.round(s / 3600) + ' h ago'; };
   switch (st.state) {
-    case 'synced': return ['ok', 'Synced' + (st.at ? ' ' + ago(st.at) : '') + ' — My List, Continue Watching, reading and these settings follow you to every browser you sign in on.'];
+    case 'synced': return ['ok', 'Synced' + (st.at ? ' ' + ago(st.at) : '') + ' — My List, Continue Watching, reading and these settings follow your profile to every browser.'];
     case 'pending': case 'syncing': case 'connecting': return ['busy', 'Syncing…'];
     case 'offline': return ['warn', "Offline — changes are kept here and sync when you're back online."];
     case 'local': return ['dim', "Sync isn't set up on this site — your lists stay in this browser."];
     case 'signed-out': return ['warn', 'Signed out — sign in again to sync.'];
+    case 'no-profile': return ['warn', "Pick who's watching to sync."];
+    case 'profile-changed': return ['warn', 'The profile was switched in another tab — reload this one.'];
     case 'error': return ['warn', st.detail === 'too-large' ? 'Sync paused: your saved data is over the 256 KB limit.' : 'Sync hit a problem' + (st.detail ? ' (' + st.detail + ')' : '') + ' — retrying.'];
     default: return ['dim', 'Sync is off in this tab.'];
   }
@@ -105,7 +119,7 @@ export function syncText(st, now = Date.now()) {
 function paintSync() {
   const box = $('set-sync'); if (!box) return;
   const st = syncStatus(), [tone, text] = syncText(st);
-  const can = st.state !== 'local' && st.state !== 'off' && st.state !== 'signed-out';
+  const can = !['local', 'off', 'signed-out', 'no-profile', 'profile-changed'].includes(st.state);
   box.innerHTML = `<div class="set-state ${tone}"><i></i><span>${esc(text)}</span></div>
     ${can ? '<button class="set-btn" data-act="sync-now">Sync now</button>' : ''}`;
 }
@@ -182,4 +196,5 @@ onAction('set-pref', (el) => { applyPref(el.dataset.pref, el.dataset.val); paint
 onAction('caption-lang-up', (el) => { moveCaptionLang(el.dataset.lang, 'up'); paintPrefs(); });
 onAction('caption-lang-remove', (el) => { moveCaptionLang(el.dataset.lang, 'remove'); paintPrefs(); });
 onAction('server-check', () => checkServer());
+onAction('profile-switch', () => { closeSettings(); openProfiles(); });
 onAction('sync-now', () => { paintSync(); syncNow().finally(() => { if (isSettingsOpen()) paintSync(); }); });

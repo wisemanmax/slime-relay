@@ -5,7 +5,9 @@ serves a single-page app: browse the TMDB catalog (Home / Movies / TV / Anime /
 Channels / Genres / Search / My List), Live TV + Sports, a detail sheet with a
 season/episode picker, and a player whose ladder mirrors the apps: your own
 Real-Debrid HD first, then an ad-free stream pulled by the extractor, then
-provider-embed iframes. Continue Watching + My List live in your browser. The
+provider-embed iframes. Each person picks their name ("Who's watching?") and
+gets their own My List, Continue Watching and reading progress, synced between
+their browsers. The
 TMDB token stays server-side (the Worker proxies it), and the whole site sits
 behind a password. It installs as an app (PWA) on iPhone, Android and desktop.
 
@@ -61,12 +63,64 @@ be on the same Cloudflare account — otherwise delete that block and Ask uses
   appears; nothing reloads under you mid-film until you tap it.
 - Offline, the app shell still opens (the catalog needs the network).
 
+## Profiles — "Who's watching?"
+Everyone who uses the site has their own history. Names only, no passwords: the
+site password stays the one gate, and a name just says whose lists to show (like
+the apps' profiles). Before profiles, every browser merged into ONE shared state.
+
+- **Picker** (`src/app/profiles.js`): a full-screen "Who's watching?" overlay with
+  a tile per name — the initial on a square in the profile's colour (the iOS
+  picker's accents, black or white label by brightness) — and an **Add name** tile
+  that becomes an inline field (Enter or Add). Each tile's **⋯** (or a long-press /
+  right-click) opens **Delete**, which asks you to type the name; it deletes that
+  person's lists and progress on every device. Shown at first visit (it can't be
+  dismissed until a name is picked), from the header avatar (desktop) or the round
+  icon in the phone header, and from Settings → Profile → **Switch profile**.
+  Esc steps back inside it. The current name shows only in Settings and as the avatar.
+- **Switching:** the old profile's queued changes are sent first (to the old
+  profile); if they can't be (offline), the picker asks "Switch anyway?" and drops
+  them. Then `POST /api/profiles/select`, the store's synced keys are emptied (no
+  tombstones — nothing is being deleted), and a sync engine for the new profile
+  pulls its state; the page re-renders when it lands (up to 4 s, then as it arrives).
+  Ask's conversation is reset. The RD key and install hint stay (browser-wide).
+- **First pick in a browser with history from before profiles** (`sw_list` /
+  `sw_continue` / `sw_reading` not empty and no `sw_profile` ever set): "Bring this
+  browser's history into <name>?" **Yes** keeps it and the first pull uploads what
+  that profile lacks (the normal sync merge); **No** clears it.
+- **Cookie + header:** `/select` sets `sw_profile=<id>` (HttpOnly; Secure;
+  SameSite=Lax; Path=/; one year). The page also remembers `{id, name, color}` in
+  the store's local `profile` key (`sw_profile` in localStorage) and names that id in
+  an `x-sw-profile` header on every `/api/state` call; the Worker uses the cookie and
+  refuses a header that disagrees, so a tab still holding someone else's data can
+  never write it into the new profile. Another tab switching the browser's profile
+  reloads this one.
+- **Migration:** the first read of the profile list (or first create/select/delete),
+  if the list was never written and the old shared state (`owner-state:v1`) holds
+  anything, makes a grey **Shared** profile (id `shared`) and moves that blob to
+  `state:shared` — today's merged history is kept, and the owner can delete it from
+  the picker. It never overwrites an existing `state:shared`. An empty old state is
+  left alone.
+- **API** (`src/worker/profiles.js`, behind the gate; 503 without the KV binding —
+  the browser then stays local and no picker shows):
+
+  | Call | Answer |
+  |---|---|
+  | `GET /api/profiles` | `{profiles:[{id,name,color,createdAt,lastUsedAt}], current}` — `current` = the cookie's id if it names a profile |
+  | `POST /api/profiles` `{name}` | 201 `{profile, profiles}` · 400 `bad-name` (1–24 characters once trimmed; spaces collapsed, invisible characters dropped) · 409 `name-taken` `{profile}` (any case) · 409 `too-many` (12 max) |
+  | `POST /api/profiles/select` `{id}` | `{profile}` + the cookie (stamps `lastUsedAt`) · 404 `no-such-profile` |
+  | `DELETE /api/profiles/<id>?confirm=<name>` | `{profiles}`; deletes `state:<id>` too and clears your cookie if it was yours · 400 `confirm-mismatch` (name, any case) · 404 |
+
+  Ids are a slug of the name plus five random characters (`max-k3j9a`). The list
+  is one KV value (`profiles`), so two browsers in different Cloudflare locations
+  adding names in the same minute can lose one (KV is eventually consistent).
+
 ## Sync — the same lists on every browser
-The apps sync through iCloud; the web keeps the owner's copy in the Worker's KV
-(`STATE`, one JSON value, behind the password like everything else). My List,
-Continue Watching, reading progress and viewer prefs follow you between the
-laptop, the phone and the installed app. The RD key and the install-hint flag
-stay in each browser (`local: true` in `SCHEMA`).
+The apps sync through iCloud; the web keeps each profile's copy in the Worker's KV
+(`STATE`, one JSON value per profile at `state:<profileId>`, behind the password
+like everything else). Your My List, Continue Watching, reading progress and viewer
+prefs follow you between the laptop, the phone and the installed app once you pick
+your name on each. The RD key, the install-hint flag and the picked profile stay in
+each browser (`local: true` in `SCHEMA`).
 
 - **How:** `src/app/sync.js` pulls `/api/state` at boot, merges it into the
   store, then PUTs local changes back 1.5 s after they stop (a real change is
@@ -76,6 +130,11 @@ stay in each browser (`local: true` in `SCHEMA`).
   reload doesn't lose them) and flush on `online`. Another tab's writes are not
   re-sent. Without the KV binding the Worker answers 503 and the browser
   quietly stays local. Settings → Sync shows synced / offline / not set up.
+- **Per profile:** an engine syncs one profile (`createSync({ profile })`). The
+  offline queue lives in the `sync` key with the profile id it belongs to; an
+  engine started for another profile drops it (a switch flushes first). A stopped
+  engine's late answers never touch the store, and `flush()` sends the queue now
+  and reports whether anything is left.
 - **Merge rules** (`mergeData`, shared by client and Worker): every list /
   continue / reading entry carries `updatedAt`, stamped centrally by the store on
   each local write; per entry, the newest wins (the server's copy on a tie). A
@@ -85,12 +144,16 @@ stay in each browser (`local: true` in `SCHEMA`).
   re-sorted newest first and capped (list 60, continue 24, reading 300). Prefs
   merge key by key; a device keeps only its own unsent pref edits over the
   server's copy, so a pref removed elsewhere (captions turned off) stays removed.
-- **API:** `GET /api/state` → `{rev, updatedAt, data:{list, continue, prefs,
+- **API:** every call needs the profile: the `sw_profile` cookie picks the KV key
+  and the `x-sw-profile` header must match it — **428** `{error:'no-profile'}` with
+  no cookie, no header, or a deleted profile (the page shows the picker); **409**
+  `{error:'profile-mismatch', profile}` when they disagree (the page reloads).
+  `GET /api/state` → `{rev, updatedAt, data:{list, continue, prefs,
   reading, tombs}}`. `PUT /api/state` `{baseRev, patch}` (any of those keys) →
   `{rev, updatedAt, data}`, or **409** `{error:'stale', rev, updatedAt, data}` when
   `baseRev` isn't current — the client merges `data` and resends. 413 over 256 KB,
   400 on a malformed patch. A no-op PUT doesn't write. `GET /api/state/health` →
-  `{build, sync, ask, extractor:{base, ok, status, ms, error}}` for Settings.
+  `{build, sync, ask, extractor:{base, ok, status, ms, error}}` for Settings (no profile needed).
 - **Consistency:** KV is eventually consistent across locations (~60 s). Two
   devices writing within a minute through different Cloudflare locations can
   lose one write until that device's next change or boot, which always merges
@@ -211,10 +274,14 @@ web/
   test/sync.mjs            store stamps/tombstones, merge rules, /api/state (fake KV), the sync
                            engine on a fake clock against the real handler (two devices converge)
   test/ask.mjs             Ask logic + tool loop (fake relay/TMDB), /api/ask proxy, Settings/Search wiring
+  test/profiles.mjs        /api/profiles CRUD + validation + cap + dedupe + delete-confirm + legacy migration,
+                           /api/state per profile (428, header/cookie guard), the switch flow, the first-pick
+                           import both ways and per-profile queues (real engine -> real Worker via a cookie jar)
   test/reading.mjs         Read tab: Mangapill parsers + MangaDex mapping on saved answers (test/fixtures/),
                            /api/read + /api/comic routes (scripted upstream), reader rules, progress, tab width
   src/worker/              feature route modules behind the gate (modules.js registers them):
     sync.js                  /api/state, /api/state/health          ask.js   /api/ask -> relay /assist
+    profiles.js              /api/profiles (names, select cookie, delete, legacy -> "Shared" migration)
     reading.js               /api/read/*, /api/comic/* (engine + comics proxy, Mangapill, MangaDex passthrough)
   scripts/icons.mjs        regenerates src/app/icons/*.png (stdlib PNG encoder; `npm run icons`)
 ```
@@ -227,7 +294,8 @@ web/
 | `router.js` | pure: `parseRoute(hash)` → `{base, arg, active, nav, tab, pills}`, `KNOWN` routes, `tabFor`, `go(hash)` |
 | `api.js` | every call to the Worker: `apiFetch` (login-bounce detection → /login), `api(tmdbPath)`, `rdCheck`, `rdKeyFromSite`, `resolveEmbed`, `liveChannels`, `liveResolve`, `debridFallback` |
 | `state.js` | **the store** (below) + domain helpers: My List, Continue Watching, RD key, prefs (`getPrefs`/`setPrefs`), reading entries |
-| `sync.js` | personal sync: the merge rules (shared with the Worker) + the client engine (`initSync`, `syncStatus`, `onSyncStatus`, `syncNow`) |
+| `sync.js` | personal sync: the merge rules (shared with the Worker) + the client engine (`initSync`, `flushSync`, `stopSync`, `syncStatus`, `onSyncStatus`, `syncNow`) |
+| `profiles.js` | who's watching: the controller (`createProfiles`), boot (`initProfiles`), the picker overlay (`openProfiles`), the header avatar |
 | `ask.js` | the Ask assistant: tool loop over the relay + TMDB (`askSession`, `createAsk`) |
 | `catalog.js` | brand channels, movie genres, `provQ` discover-query builder |
 | `util.js` | `IMG`, `kindOf`, `titleOf`, `yearOf`, `esc`, `$` |
@@ -254,7 +322,7 @@ web/
 | `ui/settings.js` | Settings sheet: Debrid, Captions, Anime audio, Home server, Sync, Install, About |
 | `ui/toast.js` | `toast(text, opts)` / `closeToast(id)` |
 | `ui/install.js` | install hints (iOS Share sheet / `beforeinstallprompt`) |
-| `styles/index.css` | the cascade order: `base, layout, player, phone, overlays` — add new files at the END |
+| `styles/index.css` | the cascade order: `base, layout, player, phone, overlays, reader, profiles` — add new files at the END |
 
 Modules never touch the DOM at import time (only inside functions), which is
 what lets `test/` import the pure ones from node. Import cycles are avoided
@@ -264,7 +332,7 @@ what lets `test/` import the pure ones from node. Import cycles are avoided
 
 ```js
 import { getState, setState, subscribe } from './state.js';
-getState()                       // frozen snapshot: { list, continue, rdkey, installHint, prefs, reading, tombs, sync }
+getState()                       // frozen snapshot: { list, continue, rdkey, installHint, prefs, reading, tombs, sync, profile }
 setState({ list: newList })      // persist + notify; null/undefined deletes the key (-> default)
 setState(patch, { source: 'sync' })
 const off = subscribe((state, { keys, source }) => { ... })   // source: 'local' | 'storage' (another tab) | yours
@@ -273,8 +341,8 @@ const off = subscribe((state, { keys, source }) => { ... })   // source: 'local'
   `continue`→`sw_continue`, `rdkey`→`sw_rdkey`, plus `installHint`→`sw_install_hint`.
   Existing browsers keep their data across the upgrade.
 - `local: true` in `SCHEMA` marks device-only keys (`rdkey` — Settings promises it
-  stays "only in this browser" — `installHint`, and `sync`, the sync engine's
-  rev + queue). Everything else syncs.
+  stays "only in this browser" — `installHint`, `sync`, the sync engine's
+  profile + rev + queue, and `profile`, who's watching). Everything else syncs.
 - **Sync stamps are automatic.** On every write whose source isn't `'sync'`, the
   store gives each changed entry of `list` / `continue` / `reading` an
   `updatedAt` (ms) and records each removed entry in `tombs`. Writers just call
@@ -309,7 +377,9 @@ owning module registers `onAction('<name>', (el, event) => …)` at top level.
 `debrid-remove`, `install`, `player-close`, `player-fullscreen`, `player-pip`,
 `set-pref`, `caption-lang-up`, `caption-lang-remove`, `server-check`, `sync-now`,
 `search-mode`, `ask-open`, `ask-send`, `ask-suggest`, `ask-retry`, `ask-stop`,
-`ask-reset`, `ask-history`.
+`ask-reset`, `ask-history`, `profiles`, `profile-switch`, `profile-pick`,
+`profile-menu`, `profile-add`, `profile-create`, `profile-close`, `profile-back`,
+`profile-retry`, `profile-import`, `profile-force`, `profile-delete`.
 
 ### Adding a route / view
 1. Add the name to `KNOWN` in `router.js` (and to `HOME_TAB_ROUTES` /

@@ -3,6 +3,8 @@
 //   - the pure merge rules, in both directions (sync.js mergeData / validatePatch)
 //   - the Worker's /api/state over a fake KV: 409 on a stale base, the 256 KB
 //     cap, no-op writes skipped, device-only keys never stored, 503 unconfigured
+//     (every request here is profile 'test': cookie + header; test/profiles.mjs
+//     covers the profile rules themselves)
 //   - the client engine on a fake clock + a fake network wired to the REAL
 //     Worker handler: debounce, the progress throttle, 409 -> merge -> retry,
 //     offline queue + online flush, other-tab writes never re-sent, two
@@ -13,22 +15,27 @@ import assert from 'node:assert/strict';
 import { createStore, memoryStorage, toggleList, recordContinue, saveProgress, getPrefs, setPrefs, putReading,
   removeReading, PREF_DEFAULTS, TOMB_TTL_MS } from '../src/app/state.js';
 import { mergeData, validatePatch, emptyData, createSync } from '../src/app/sync.js';
-import { syncRoutes, STATE_KEY, MAX_STATE_BYTES } from '../src/worker/sync.js';
+import { syncRoutes, MAX_STATE_BYTES } from '../src/worker/sync.js';
+import { stateKey } from '../src/worker/profiles.js';
 import worker from '../src/worker.js';
 
 const T0 = Date.UTC(2026, 9, 11, 12, 0, 0);
 
+/** A KV namespace that already knows the profile 'test' (state lives at state:test). */
 function fakeKV() {
-  const m = new Map();
+  const m = new Map([['profiles', JSON.stringify({ profiles: [{ id: 'test', name: 'Test', color: '#35C759', createdAt: 1, lastUsedAt: 1 }] })]]);
   return {
     m, puts: 0,
     async get(k, type) { const v = m.has(k) ? m.get(k) : null; return v == null ? null : type === 'json' ? JSON.parse(v) : v; },
     async put(k, v) { this.puts++; m.set(k, String(v)); },
+    async delete(k) { m.delete(k); },
   };
 }
+const AS_TEST = { cookie: 'sw_profile=test', 'x-sw-profile': 'test' };
+const STATE_KEY = stateKey('test');
 const call = (env, method, path, body) => {
-  const init = { method };
-  if (body !== undefined) { init.body = typeof body === 'string' ? body : JSON.stringify(body); init.headers = { 'content-type': 'application/json' }; }
+  const init = { method, headers: { ...AS_TEST } };
+  if (body !== undefined) { init.body = typeof body === 'string' ? body : JSON.stringify(body); init.headers['content-type'] = 'application/json'; }
   const req = new Request('https://watch.example' + path, init);
   return syncRoutes(req, env, new URL(req.url));
 };
@@ -251,7 +258,9 @@ export async function runSyncChecks() {
     r = await worker.fetch(new Request('https://w/login', { method: 'POST', body: new URLSearchParams({ password: 'pw' }) }), wenv);
     const cookie = (r.headers.get('set-cookie') || '').split(';')[0];
     r = await worker.fetch(new Request('https://w/api/state', { headers: { cookie } }), wenv);
-    eq([r.status, (await r.json()).rev], [200, 0], '/api/state answers behind the gate');
+    eq([r.status, (await r.json()).error], [428, 'no-profile'], '/api/state behind the gate wants a profile');
+    r = await worker.fetch(new Request('https://w/api/state', { headers: { cookie: cookie + '; sw_profile=test', 'x-sw-profile': 'test' } }), wenv);
+    eq([r.status, (await r.json()).rev], [200, 0], '/api/state answers behind the gate, as that profile');
     r = await worker.fetch(new Request('https://w/api/ask', { method: 'POST', headers: { cookie }, body: '{}' }), wenv);
     eq(r.status, 503, '/api/ask is routed (503 without SLIME_TOKEN)');
   }

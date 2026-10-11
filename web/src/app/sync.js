@@ -1,6 +1,7 @@
-/* Personal sync: the owner's My List, Continue Watching, prefs and reading
+/* Personal sync: each profile's My List, Continue Watching, prefs and reading
    progress follow them between browsers (the apps use iCloud; the web keeps
-   one copy in the Worker's KV — see src/worker/sync.js).
+   one copy per profile in the Worker's KV — see src/worker/sync.js, and
+   profiles.js for who's watching).
 
    Two halves in one file:
    1. the PURE merge rules (mergeData, validatePatch …) — the Worker imports
@@ -18,12 +19,20 @@
    - each collection is re-sorted newest first and capped at SCHEMA[key].max.
    - prefs are shallow-merged (`b` over `a`; a null in `b` deletes the key); a
      client adopting the server's copy keeps only its own unsent pref edits.
-   Device-only keys (rdkey, installHint, sync) are never part of the data. */
+   Device-only keys (rdkey, installHint, sync, profile) are never part of the data.
+
+   Profiles: an engine syncs ONE profile (createSync({ profile })). Every
+   request names it in the x-sw-profile header, which the Worker checks against
+   the sw_profile cookie; the persisted queue (the `sync` key) records whose it
+   is, and an engine started for another profile drops it. Switching = flush()
+   the old engine, stop() it, reset the store, start a new one (profiles.js). */
 
 import { SCHEMA, SYNCED_KEYS, itemId, itemEntries, stampOf, pruneTombs, appStore } from './state.js';
 import { loginBounce } from './api.js';
 
 export const SYNC_PATH = '/api/state';
+/** The profile this page holds, on every /api/state request (must match the sw_profile cookie). */
+export const PROFILE_HEADER = 'x-sw-profile';
 const ITEM_KEYS = SYNCED_KEYS.filter(k => SCHEMA[k].items);
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -152,11 +161,17 @@ const diffKeys = (a, b) => {
     fake network and the real Worker handler. Status states:
       off · connecting · synced · pending (changes waiting) · syncing ·
       offline (queued until back online) · local (sync not set up — stays
-      local, silently) · signed-out · error (retrying) */
+      local, silently) · signed-out · error (retrying) · no-profile (the
+      server knows no such profile: pick one) · profile-changed (another tab
+      switched this browser's profile)
+    profile: the id this engine syncs (null on a site without profiles).
+    onProfile('none' | 'mismatch', body): the server refused the profile; the
+    engine has stopped itself. */
 export function createSync({
   store, fetch: doFetch, now = () => Date.now(),
   setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t),
   isOnline = () => true, onRemote = () => {}, onStatus = () => {},
+  profile = null, onProfile = () => {},
   debounceMs = 1500,      // quiet time after a change before it is sent
   maxWaitMs = 10000,      // ...but never hold a real change longer than this
   minorGapMs = 60000,     // progress-only changes: at most one PUT per minute (KV writes are metered)
@@ -170,16 +185,24 @@ export function createSync({
   };
 
   const meta = () => store.getState().sync || {};
+  // The persisted queue + rev belong to the profile that wrote them. One left by
+  // another profile (or by the build before profiles) describes data this store
+  // no longer holds for us: drop it. (A first pick that imports this browser's
+  // history still uploads everything — the first pull queues whatever the
+  // server lacks.)
+  if ((meta().profile || null) !== (profile || null)) store.setState({ sync: profile ? { profile } : null }, { source: 'sync' });
+  const headers = (h) => (profile ? { ...h, [PROFILE_HEADER]: profile } : h);
   const saved = meta().pending || {};
   const pending = { keys: new Set(saved.keys || []), prefKeys: new Set(saved.prefKeys || []), minor: false, since: 0 };
   let sending = null;              // the batch on the wire (still persisted until it lands)
   let seen = syncedData(store.getState());
   let timer = null, retryTimer = null, inflight = null, again = false;
-  let started = false, ready = false, disabled = false;
+  let started = false, ready = false, disabled = false, stopped = false, startP = null, pulling = null;
   let lastPushAt = 0, lastPullAt = 0, conflicts = 0, failures = 0, unsub = null;
 
   const rev = () => Number(meta().rev) || 0;
   function saveMeta(patch) {
+    if (stopped) return;   // a stopped engine's late answer must not touch the next profile's store
     const cur = meta(), next = { ...cur, ...patch };
     if (!sameValue(cur, next)) store.setState({ sync: next }, { source: 'sync' });
   }
@@ -233,6 +256,7 @@ export function createSync({
   /** Merge the server's state into the store. With `markDiff`, whatever the
       merge kept that the server lacks is queued for upload. */
   function adopt(server, markDiff) {
+    if (stopped) return;
     const data = isObj(server && server.data) ? server.data : {};
     const local = syncedData(store.getState());
     // Prefs: the server's copy is the truth for every key we have no unsent
@@ -251,6 +275,15 @@ export function createSync({
       const diff = SYNCED_KEYS.filter(k => !sameValue(merged[k], remote[k]));
       if (diff.length) markDirty(diff, diff.includes('prefs') ? diffKeys(remote.prefs, merged.prefs) : [], false);
     }
+  }
+
+  /** 428 / profile-mismatch: this engine's profile is not the browser's any more. */
+  function profileRefused(res, json) {
+    const kind = res.status === 428 ? 'none' : res.status === 409 && json && json.error === 'profile-mismatch' ? 'mismatch' : null;
+    if (!kind) return false;
+    disable(kind === 'none' ? 'no-profile' : 'profile-changed');
+    try { onProfile(kind, json); } catch (e) { console.error('sync onProfile failed', e); }
+    return true;
   }
 
   const take = () => {
@@ -290,13 +323,16 @@ export function createSync({
       let res, json = null;
       try {
         res = await doFetch(SYNC_PATH, {
-          method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body,
+          method: 'PUT', credentials: 'same-origin', headers: headers({ 'content-type': 'application/json' }), body,
           // A tab being closed: let the request outlive the page (browsers cap keepalive bodies at 64 KB).
           keepalive: !!opts.keepalive && body.length < 60000,
         });
-      } catch { restore(sending); setStatus('offline'); if (isOnline()) retryLater(push); return; }
+      } catch { if (stopped) return; restore(sending); setStatus('offline'); if (isOnline()) retryLater(push); return; }
+      if (stopped) return;
       if (loginBounce(res) || res.status === 401) { restore(sending); disable('signed-out'); return; }
       try { json = await res.json(); } catch {}
+      if (stopped) return;
+      if (profileRefused(res, json)) { restore(sending); return; }
       if (res.status === 200 && json && json.data) {
         conflicts = 0; failures = 0; lastPushAt = now();
         sending = null; adopt(json, false);
@@ -319,16 +355,24 @@ export function createSync({
     if (again) { again = false; schedule(0); } else if (pending.keys.size && status.state !== 'error') schedule();
   }
 
-  async function pull() {
+  /** One pull at a time: a second request while one is out shares it. */
+  function pull() {
+    if (!pulling) pulling = doPull().finally(() => { pulling = null; });
+    return pulling;
+  }
+  async function doPull() {
     if (disabled) return;
     if (!isOnline()) { ready = true; setStatus('offline'); return; }
     if (status.state === 'off' || status.state === 'offline') setStatus('connecting');
     let res, json = null;
-    try { res = await doFetch(SYNC_PATH, { credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/json' } }); }
-    catch { ready = true; setStatus('offline'); retryLater(pull); return; }
+    try { res = await doFetch(SYNC_PATH, { credentials: 'same-origin', cache: 'no-store', headers: headers({ accept: 'application/json' }) }); }
+    catch { if (stopped) return; ready = true; setStatus('offline'); retryLater(pull); return; }
+    if (stopped) return;
     if (loginBounce(res) || res.status === 401) { disable('signed-out'); return; }
     if (res.status === 503) { disable('local'); return; }
     try { json = await res.json(); } catch {}
+    if (stopped) return;
+    if (profileRefused(res, json)) return;
     if (!res.ok || !json || !isObj(json.data)) { ready = true; setStatus('error', 'HTTP ' + res.status); retryLater(pull); return; }
     failures = 0; lastPullAt = now(); ready = true;
     adopt(json, true);
@@ -336,8 +380,23 @@ export function createSync({
     else setStatus('synced');
   }
 
+  /** Send everything queued now and wait for it (before a profile switch).
+      -> true when nothing is left unsent. */
+  async function flush() {
+    let pushes = 0;
+    while (!stopped) {
+      if (pulling) { await pulling; continue; }
+      if (inflight) { try { await inflight; } catch {} await null; continue; }
+      if (disabled || !ready || !pending.keys.size || !isOnline() || pushes >= 5) break;
+      pushes++;
+      await push();
+      if (status.state === 'offline' || status.state === 'error') break;
+    }
+    return !pending.keys.size;
+  }
+
   function start() {
-    if (started) return Promise.resolve();
+    if (started) return startP;
     started = true;
     unsub = store.subscribe((state, { keys, source }) => {
       const prev = seen; seen = syncedData(state);
@@ -348,12 +407,15 @@ export function createSync({
       const prefKeys = changed.includes('prefs') ? diffKeys(prev.prefs, seen.prefs) : [];
       markDirty(changed, prefKeys, changed.every(k => k === 'tombs' || minorChange(k, prev[k], seen[k])));
     });
-    return pull();
+    return (startP = pull());
   }
 
   return {
     start,
-    pull, push,
+    pull, push, flush,
+    /** The first pull (resolves when it is done, however it ended). */
+    ready: () => startP || Promise.resolve(),
+    profile: () => profile,
     status: () => status,
     /** Back online: fetch what changed elsewhere, then send what queued here. */
     online: () => (disabled ? Promise.resolve() : pull()),
@@ -363,7 +425,8 @@ export function createSync({
     /** Tab hidden / closing: send what's queued now, throttle or not. */
     hidden: () => (pending.keys.size ? push({ keepalive: true }) : Promise.resolve()),
     syncNow: async () => { if (disabled) return; await pull(); },
-    stop: () => { if (unsub) unsub(); unsub = null; disable('off'); },
+    /** Stop for good: nothing it has in flight may write to the store afterwards. */
+    stop: () => { stopped = true; if (unsub) unsub(); unsub = null; disable('off'); },
   };
 }
 
@@ -385,26 +448,39 @@ function refreshIfSafe(keys) {
   window.dispatchEvent(new Event('hashchange'));
 }
 
-/** Start syncing (once, at boot, after the first route()). opts.onRemote(keys)
+let wired = false;
+
+/** Start syncing `opts.profile` (profiles.js calls this at boot and on every
+    switch; a running engine is stopped first — flush it before if its queue
+    matters). opts.onProfile(kind) hears a refused profile; opts.onRemote(keys)
     replaces the default "re-render Home / My List" refresh. */
 export function initSync(opts = {}) {
-  if (engine) return engine;
+  if (engine) engine.stop();
   engine = createSync({
     store: appStore(),
     fetch: (url, init) => fetch(url, init),
     isOnline: () => navigator.onLine !== false,
+    profile: opts.profile || null,
+    onProfile: opts.onProfile || (() => {}),
     onRemote: opts.onRemote || refreshIfSafe,
     onStatus: (st) => { for (const fn of [...watchers]) { try { fn(st); } catch {} } },
   });
-  window.addEventListener('online', () => engine.online());
-  window.addEventListener('offline', () => engine.offline());
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') engine.visible(); else engine.hidden();
-  });
-  window.addEventListener('pagehide', () => engine.hidden());
+  if (!wired) {
+    wired = true;
+    window.addEventListener('online', () => engine.online());
+    window.addEventListener('offline', () => engine.offline());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') engine.visible(); else engine.hidden();
+    });
+    window.addEventListener('pagehide', () => engine.hidden());
+  }
   engine.start();
   return engine;
 }
+/** Send the current engine's queue now. -> true when nothing is left unsent. */
+export const flushSync = () => (engine ? engine.flush() : Promise.resolve(true));
+/** Stop syncing (before the store is reset for another profile). */
+export function stopSync() { if (engine) engine.stop(); }
 
 /** { state, at, detail } — see createSync. 'off' until initSync runs. */
 export const syncStatus = () => (engine ? engine.status() : OFF);

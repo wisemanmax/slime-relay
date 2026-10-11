@@ -25,7 +25,7 @@ import { initPlayer } from './player/player.js';
 import { seedRdKey } from './player/debrid.js';
 import { initKeys } from './keys.js';
 import { initPwa } from './pwa.js';
-import { initSync } from './sync.js';
+import { initProfiles } from './profiles.js';
 
 /** route base -> view(arg). Keep in step with router.KNOWN. */
 const VIEWS = {
@@ -65,6 +65,6 @@ initHeaderSearch();
 initReaderKeys();   // before initKeys: an open reader's keys (Esc, '/') win
 initKeys();
 route();
-initSync();   // personal sync (W3): starts after the first render
+initProfiles();   // who's watching -> that profile's sync (or the picker); after the first render
 initPwa();
 initInstall();

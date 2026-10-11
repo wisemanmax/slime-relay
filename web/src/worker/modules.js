@@ -6,12 +6,14 @@
 import { readingRoutes } from './reading.js';   // W4
 import { syncRoutes } from './sync.js';         // W3
 import { askRoutes } from './ask.js';           // W3
+import { profilesRoutes } from './profiles.js'; // profiles
 import { playerRoutes } from './player.js';     // W2
 
 export const ROUTE_MODULES = [
   { prefix: '/api/player/', handle: playerRoutes },     // W2
   { prefix: '/api/state',   handle: syncRoutes },     // W3 (/api/state, /api/state/health)
   { prefix: '/api/ask',     handle: askRoutes },      // W3
+  { prefix: '/api/profiles', handle: profilesRoutes },  // profiles (/api/profiles, /select, /<id>)
   { prefix: '/api/read/', handle: readingRoutes }, { prefix: '/api/comic/', handle: readingRoutes },  // W4
 ];
 

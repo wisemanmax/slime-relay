@@ -37,8 +37,9 @@ RELAY_BASE = "https://slime-relay.byheirw.workers.dev"
 #                    and is the relay token Ask sends to /assist
 #   RD_KEY           optional default Real-Debrid token for signed-in browsers
 
-# Personal sync (src/worker/sync.js): the owner's My List, Continue Watching,
-# prefs and reading progress, one JSON value in KV, so every browser agrees.
+# Personal sync (src/worker/sync.js) + profiles (src/worker/profiles.js): each
+# profile's My List, Continue Watching, prefs and reading progress is one JSON
+# value in KV (state:<profileId>), and the list of names is the `profiles` value.
 # Create once:  npx wrangler kv namespace create STATE   -> paste the id below.
 # Without this binding /api/state answers 503 and each browser stays local.
 [[kv_namespaces]]

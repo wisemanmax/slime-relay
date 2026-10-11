@@ -20,8 +20,8 @@ export async function runUnitChecks() {
   {
     const ls = memoryStorage();
     const s = createStore(ls);
-    eq(s.getState(), { list: [], continue: [], rdkey: '', installHint: '', prefs: {}, reading: {}, tombs: {}, sync: {} }, 'defaults');
-    eq(Object.values(SCHEMA).map(x => x.storage).sort(), ['sw_continue', 'sw_install_hint', 'sw_list', 'sw_prefs', 'sw_rdkey', 'sw_reading', 'sw_sync', 'sw_tombs'], 'localStorage keys unchanged (+ install hint, prefs, reading, sync bookkeeping)');
+    eq(s.getState(), { list: [], continue: [], rdkey: '', installHint: '', prefs: {}, reading: {}, tombs: {}, sync: {}, profile: null }, 'defaults');
+    eq(Object.values(SCHEMA).map(x => x.storage).sort(), ['sw_continue', 'sw_install_hint', 'sw_list', 'sw_prefs', 'sw_profile', 'sw_rdkey', 'sw_reading', 'sw_sync', 'sw_tombs'], 'localStorage keys unchanged (+ install hint, prefs, reading, sync bookkeeping, profile)');
 
     const seen = [];
     const off = s.subscribe((st, meta) => seen.push([meta.keys, meta.source]));

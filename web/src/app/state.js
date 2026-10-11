@@ -6,7 +6,7 @@
    through here.
 
      getState()                -> frozen snapshot { list, continue, rdkey, installHint,
-                                  prefs, reading, tombs, sync }
+                                  prefs, reading, tombs, sync, profile }
      setState(patch, meta?)    -> merges `patch`, persists each changed key, notifies
                                   subscribers. A value of null/undefined deletes the
                                   key (state falls back to its default).
@@ -46,7 +46,8 @@ export const SCHEMA = {
   prefs:       { storage: 'sw_prefs',        def: {} },               // viewer prefs (PREF_DEFAULTS below), shallow-merged by sync
   reading:     { storage: 'sw_reading',      def: {}, items: 'map', max: 300 },    // manga/comic progress + saved titles keyed by source:id
   tombs:       { storage: 'sw_tombs',        def: {} },               // { list|continue|reading: { entryId: deletedAt } } — synced deletions
-  sync:        { storage: 'sw_sync',         def: {}, local: true },  // sync.js bookkeeping: { rev, pending }
+  sync:        { storage: 'sw_sync',         def: {}, local: true },  // sync.js bookkeeping: { profile, rev, pending }
+  profile:     { storage: 'sw_profile',      def: null, local: true }, // who's watching in this browser: { id, name, color } (profiles.js)
 };
 
 /** Keys sync uploads (everything not `local`). */

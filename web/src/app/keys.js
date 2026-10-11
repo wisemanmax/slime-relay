@@ -1,6 +1,7 @@
 /* Global keyboard handling.
      Esc   close player / detail / settings (but an Esc that leaves fullscreen
-           only leaves fullscreen — the browser consumes it for that)
+           only leaves fullscreen — the browser consumes it for that); with
+           "Who's watching?" open, Esc steps back inside it first
      /     focus search (header field on desktop, the Search screen on phones)
      + the player shortcuts in player/player.js handlePlayerKey()
    Nothing fires while typing in a field, and keys held with Ctrl/Cmd/Alt are
@@ -11,6 +12,7 @@ import { isPlayerOpen } from './player/session.js';
 import { closeDetail } from './views/detail.js';
 import { closeSettings, isSettingsOpen } from './ui/settings.js';
 import { focusSearch } from './views/search.js';
+import { escProfiles, isProfilesOpen } from './profiles.js';
 
 /* A focused <video controls> has its own keyboard handling (Chrome acts on
    space/arrows at the video, on keyup), which would double-toggle with ours —
@@ -26,13 +28,14 @@ export function initKeys() {
   window.addEventListener('keydown', e => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '') || (e.target && e.target.isContentEditable);
     if (e.key === 'Escape') {
+      if (escProfiles()) return;
       // The browser exits fullscreen on Escape by itself. Closing the player in
       // the same keystroke would end playback when all the viewer asked for was
       // the window back, so let that Escape be consumed by leaving fullscreen.
       if (fsActive()) return;
       closePlayer(); closeDetail(); closeSettings(); return;
     }
-    if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (typing || e.ctrlKey || e.metaKey || e.altKey || isProfilesOpen()) return;
     if (isPlayerOpen()) {
       if (handlePlayerKey(e)) {
         e.preventDefault();

@@ -24,12 +24,13 @@
       <span style="color:var(--dim)">⌕</span>
       <input id="q" placeholder="Search…" autocomplete="off">
     </div>
+    <span class="avatar desktop" id="hdr-avatar" data-act="profiles" title="Who's watching?" hidden></span>
     <span class="logout desktop" data-act="settings" title="Debrid settings" style="font-size:18px;line-height:1">⚙</span>
     <span class="logout desktop" data-act="logout">Sign out</span>
     <!-- Phone-only header cluster, mirroring the app: dice, profile, settings. -->
     <div class="hdr-icons">
       <span class="ic" title="Surprise me" data-act="surprise">🎲</span>
-      <span class="ic me" title="Sign out" data-act="logout">🍿</span>
+      <span class="ic me" id="hdr-me" title="Who's watching?" data-act="profiles">🍿</span>
       <span class="ic" title="Settings" data-act="settings">⚙</span>
     </div>
   </header>
@@ -42,6 +43,8 @@
 
   <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
   <div class="modal" id="setmodal"><div class="sheet" id="setsheet" style="max-width:540px;margin-top:70px"></div></div>
+  <!-- "Who's watching?" (profiles.js) — above the player and the reader. -->
+  <div class="pick" id="pick" role="dialog" aria-modal="true" aria-label="Who's watching?" aria-hidden="true"></div>
   <div class="player" id="player">
     <div class="bar">
       <span class="pt" id="ptitle"></span>

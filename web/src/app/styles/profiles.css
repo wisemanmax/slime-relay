@@ -1,0 +1,68 @@
+/* "Who's watching?" (profiles.js): the picker overlay, the header avatar and
+   Settings' profile row. Last in the cascade. */
+
+/* Header: a small avatar on desktop; on phones the header's round "me" icon
+   (phone.css .hdr-icons .ic.me) shows the initial instead. */
+.avatar{display:inline-grid;place-items:center;flex:0 0 auto;width:30px;height:30px;border-radius:8px;
+  font-weight:900;font-size:14px;line-height:1;cursor:pointer;user-select:none}
+.avatar[hidden]{display:none}
+.hdr-icons .ic.me.has-profile{border-color:transparent;font-weight:900;font-size:15px;line-height:1}
+@media(max-width:700px){header .avatar.desktop{display:none}}
+
+/* The overlay: opaque, so the previous person's rows never show through. */
+.pick{position:fixed;inset:0;z-index:90;display:none;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  background:radial-gradient(1000px 520px at 50% -10%,#12211a,#000 70%)}
+.pick.open{display:block}
+.pick-in{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:48px 16px 40px;text-align:center}
+.pick .brand{margin-bottom:22px}
+.pick h1{font-size:clamp(26px,5vw,40px);font-weight:900;margin:0 0 10px;letter-spacing:-.3px}
+.pick h2{font-size:20px;font-weight:800;margin:14px 0 6px}
+.pick-note{color:#cdd6d0;font-size:14.5px;line-height:1.45;margin:4px auto 12px;max-width:420px}
+.pick-note.pick-err{color:#f4665f}
+.pick-hint{color:var(--dim2);font-size:12.5px;margin:4px 0 10px}
+.pick-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:22px 26px;max-width:760px;margin:16px 0 12px}
+.pick-tile{position:relative;width:112px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.pick-face{display:flex;flex-direction:column;align-items:center;gap:10px;width:100%;padding:0;border:0;background:none;
+  color:var(--dim);font:inherit;cursor:pointer;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+.pick-av{width:104px;height:104px;border-radius:22px;display:grid;place-items:center;flex:0 0 auto;
+  font-size:46px;font-weight:900;line-height:1;transition:transform .15s ease,box-shadow .15s ease}
+.pick-face:hover,.pick-face:focus-visible{color:var(--txt);outline:none}
+.pick-face:hover .pick-av,.pick-face:focus-visible .pick-av{box-shadow:0 0 0 3px #fff}
+.pick-face:active .pick-av{transform:scale(.96)}
+.pick-tile.cur .pick-av{box-shadow:0 0 0 3px var(--accent)}
+.pick-name{font-size:15px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pick-av.add{background:transparent;border:2px dashed #3a4640;color:var(--dim);font-weight:400}
+/* The name field needs room (it is the whole first visit). */
+.pick-tile.pick-add{width:180px}
+.pick-more{position:absolute;top:-8px;right:-8px;width:30px;height:30px;border-radius:50%;border:1px solid var(--line);
+  background:#141a16;color:var(--dim);font:inherit;font-size:15px;line-height:1;cursor:pointer;padding:0}
+.pick-more:hover,.pick-more:focus-visible{color:var(--txt);border-color:var(--dim2)}
+.pick-input{width:100%;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:#0d120f;
+  color:var(--txt);font:inherit;font-size:16px;text-align:center}
+.pick-input:focus{outline:none;border-color:var(--accent)}
+.pick-panel{display:flex;flex-direction:column;align-items:center;max-width:440px;margin:6px 0}
+.pick-panel .pick-input{max-width:260px;margin:4px 0 8px}
+.pick-label{font-size:13.5px;color:var(--dim);margin-top:4px}
+.pick-row{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:8px}
+.pick-btn{border:0;cursor:pointer;font:inherit;font-weight:800;font-size:14.5px;color:var(--txt);
+  background:rgba(255,255,255,.12);padding:10px 18px;border-radius:22px}
+.pick-btn:hover{background:rgba(255,255,255,.2)}
+.pick-btn.primary{background:#fff;color:#0a0d0b}
+.pick-btn.danger{background:#f4665f;color:#1a0605}
+.pick-btn[disabled]{opacity:.4;cursor:default}
+.pick-btn.small{padding:7px 14px;font-size:13.5px}
+@media(max-width:700px){
+  .pick-in{padding-top:max(36px, env(safe-area-inset-top))}
+  .pick-grid{gap:18px;max-width:340px}
+  .pick-tile{width:96px}
+  .pick-tile.pick-add{width:180px}
+  .pick-av{width:88px;height:88px;border-radius:18px;font-size:38px}
+}
+@media (prefers-reduced-motion:reduce){.pick-av{transition:none}}
+
+/* Settings: who's watching. */
+.set-prof{display:flex;align-items:center;gap:12px;margin:2px 0 6px;text-align:left}
+.set-prof .set-note{margin:2px 0 0}
+.set-av{width:44px;height:44px;border-radius:11px;display:grid;place-items:center;flex:0 0 auto;
+  font-weight:900;font-size:20px;line-height:1}
