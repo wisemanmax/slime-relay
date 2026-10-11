@@ -20,10 +20,14 @@
 // Routes:
 //   POST /register        heartbeat (admin) -> { ok }
 //   GET  /route[?device=] ranked enabled addresses (user|admin) -> { servers:[url] }
-//                         With a device that has a policy: its pinned server
-//                         first (when up), its avoided servers removed. Header
-//                         x-slime-route-note: avoid-exhausted when avoiding would
-//                         leave nothing (the full list is returned instead).
+//                         With a device that has a policy: ONLY its pinned
+//                         server's addresses while that server is enabled and up
+//                         (else the normal list); its avoided servers removed.
+//                         Header x-slime-route-note: avoid-exhausted when avoiding
+//                         would leave nothing (the full list is returned instead).
+//                         A "server" here is every srv: entry sharing a name: one
+//                         extractor registers its LAN, Tailscale and tunnel paths
+//                         as separate ids (SlimeWatchExtractor/heartbeat.js).
 //   GET  /servers         full fleet + status (admin) -> { servers:[...], devices:{...} }
 //   GET  /pick            single best enabled server (admin) -> { server }
 //   POST /admin/action    { action:'disable'|'enable'|'prefer'|'unprefer', id } (admin)
@@ -260,7 +264,7 @@ export default {
       usable.sort(rank);
       // Optional ?device=: the owner's per-device pin/avoid. A malformed id or a
       // device with no policy gets exactly the shared list, as before.
-      const { list, note } = routeFor(usable, deviceRule(policy, url.searchParams.get('device')));
+      const { list, note } = routeFor(usable, deviceRule(policy, url.searchParams.get('device')), servers);
       return json({ servers: list.map((s) => s.address) }, 200,
         note ? { 'x-slime-route-note': note } : undefined);
     }
@@ -344,14 +348,30 @@ function deviceRule(policy, id) {
     ? policy.devices[id] : null;
 }
 
+// sameServer(entry, id): is this srv: entry the server `id` names — that id, or
+// a sibling registered under the same name (one extractor heartbeats its LAN,
+// Tailscale and tunnel paths as separate ids). `servers` is every live entry,
+// disabled included; an id with no live entry matches only itself.
+function serverMatcher(servers) {
+  const nameById = new Map(servers.map((s) => [s.id, s.name]));
+  return (entry, id) => entry.id === id || (nameById.has(id) && entry.name === nameById.get(id));
+}
+
 // One device's ranked list. `usable` is the shared list (enabled, addressed,
-// ranked). Pin first when it's in that list (a down or disabled pin falls
-// through, never stranding the device), then the rest minus `avoid`. If
-// avoiding empties the list, availability beats policy: the full list + a note.
-function routeFor(usable, rule) {
+// ranked); `servers` is the whole fleet. A pin is EXCLUSIVE: while any of the
+// pinned server's entries is usable, the device gets only those (the apps rank
+// reachable addresses by network, so a pin listed "first" could still lose to
+// another server's LAN address). A down or disabled pin falls through to the
+// normal list, never stranding the device. Avoided servers are removed from the
+// normal list; if that empties it, availability beats policy: full list + note.
+function routeFor(usable, rule, servers) {
   if (!rule) return { list: usable, note: '' };
-  const pin = rule.server ? usable.find((s) => s.id === rule.server) || null : null;
-  const list = [...(pin ? [pin] : []), ...usable.filter((s) => s !== pin && !rule.avoid.includes(s.id))];
+  const same = serverMatcher(servers);
+  if (rule.server) {
+    const pinned = usable.filter((s) => same(s, rule.server));
+    if (pinned.length) return { list: pinned, note: '' };
+  }
+  const list = usable.filter((s) => !rule.avoid.some((id) => same(s, id)));
   if (!list.length && usable.length) return { list: usable, note: 'avoid-exhausted' };
   return { list, note: '' };
 }
@@ -361,14 +381,16 @@ function routeFor(usable, rule) {
 function routingSummary(rule, nameOf) {
   if (!rule) return 'auto';
   if (rule.server) return `pinned:${nameOf(rule.server)}`;
-  if (rule.avoid.length) return `avoid:${rule.avoid.map(nameOf).join(',')}`;
+  if (rule.avoid.length) return `avoid:${[...new Set(rule.avoid.map(nameOf))].join(',')}`;
   return 'auto';
 }
 
 // assign / avoid / unavoid / clear-device on policy.devices (in place). Returns
 // an error string, or '' on success. Servers must be live fleet ids (srv:<id>);
 // unavoid also accepts an id already in the device's avoid list, so a retired
-// server can still be cleaned out.
+// server can still be cleaned out. Same-name siblings count as one server:
+// pinning X drops avoids of X's siblings, avoiding a sibling of the pin unpins,
+// and unavoid clears every sibling.
 async function applyDeviceAction(env, policy, body) {
   const device = body?.device;
   if (typeof device !== 'string' || !DEVICE_RE.test(device)) return 'bad device id';
@@ -377,20 +399,24 @@ async function applyDeviceAction(env, policy, body) {
   const cur = Object.hasOwn(devices, device)
     ? devices[device] : { server: null, avoid: [], seenAt: 0 };
   const server = body.server;
-  const known = async (sid) => typeof sid === 'string' && sid.length > 0 && sid.length <= 128 &&
-    !!(await env.SERVERS.get(`srv:${sid}`));
+  const { servers } = await fleet(env);
+  const live = new Set(servers.map((s) => s.id));
+  const known = (sid) => typeof sid === 'string' && live.has(sid);
+  const match = serverMatcher(servers);
+  // Do ids a and b name one server? (an id with no live entry matches itself only)
+  const same = (a, b) => a === b || servers.some((s) => s.id === a && match(s, b));
   if (body.action === 'assign') {
     const sid = server === null || server === undefined || server === '' ? null : server;
-    if (sid !== null && !(await known(sid))) return 'unknown server';
+    if (sid !== null && !known(sid)) return 'unknown server';
     cur.server = sid;
-    if (sid) cur.avoid = cur.avoid.filter((x) => x !== sid);
+    if (sid) cur.avoid = cur.avoid.filter((x) => !same(x, sid));
   } else if (body.action === 'avoid') {
-    if (!(await known(server))) return 'unknown server';
-    if (!cur.avoid.includes(server)) cur.avoid.push(server);
-    if (cur.server === server) cur.server = null;
+    if (!known(server)) return 'unknown server';
+    if (!cur.avoid.some((x) => same(x, server))) cur.avoid.push(server);
+    if (cur.server && same(cur.server, server)) cur.server = null;
   } else {   // unavoid
-    if (typeof server !== 'string' || !(cur.avoid.includes(server) || await known(server))) return 'unknown server';
-    cur.avoid = cur.avoid.filter((x) => x !== server);
+    if (typeof server !== 'string' || !(cur.avoid.includes(server) || known(server))) return 'unknown server';
+    cur.avoid = cur.avoid.filter((x) => !same(x, server));
   }
   cur.seenAt = Date.now();   // an owner change counts as a touch for pruning
   if (cur.server || cur.avoid.length) devices[device] = cur;
@@ -554,24 +580,32 @@ function dashboardPage(key) {
         </div>
       </div>\`;
     }
+    // One entry per server NAME: an extractor registers its LAN, Tailscale and
+    // tunnel paths as separate ids, and the relay treats same-name ids as one
+    // server. Each group is sent by its first id (sorted).
+    function groups(){
+      const m=new Map();
+      for(const s of FLEET){const n=String(s.name??s.id);const g=m.get(n)||{name:n,ids:[],enabled:false};g.ids.push(String(s.id));g.enabled=g.enabled||!!s.enabled;m.set(n,g);}
+      return [...m.values()].map(g=>(g.ids.sort(),g.rep=g.ids[0],g)).sort((a,b)=>a.name.localeCompare(b.name));
+    }
     // The viewer's Server control: Automatic or one fleet server (the device's
-    // pin), plus "Not my Mac" (avoid the server named "Home Mac", by id). Shown
-    // only for device ids the relay accepts.
+    // pin — exclusive while that server is up), plus "Not my Mac" (avoid the
+    // server named "Home Mac", by id). Shown only for device ids the relay accepts.
     function routeCtl(w){
       const id=String(w.id??'');
       if(!DEV_RE.test(id))return '';
       const rule=own(DEVICES,id)?DEVICES[id]:null;
       const pin=(rule&&rule.server)||'';
       const avoid=rule&&Array.isArray(rule.avoid)?rule.avoid:[];
-      const d=esc(id);
+      const d=esc(id), gs=groups();
       let opts='<option value=""'+(pin?'':' selected')+'>Automatic</option>', listed=false;
-      for(const s of FLEET.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)))){
-        const sel=s.id===pin; if(sel)listed=true;
-        opts+='<option value="'+esc(s.id)+'"'+(sel?' selected':'')+'>'+esc(s.name)+(s.enabled?'':' (disabled)')+'</option>';
+      for(const g of gs){
+        const sel=!!pin&&g.ids.includes(pin); if(sel)listed=true;
+        opts+='<option value="'+esc(sel?pin:g.rep)+'"'+(sel?' selected':'')+'>'+esc(g.name)+(g.enabled?'':' (disabled)')+'</option>';
       }
       if(pin&&!listed)opts+='<option value="'+esc(pin)+'" selected>'+esc(pin)+' (offline)</option>';
-      const mac=FLEET.find(s=>/home mac/i.test(String(s.name??'')));
-      const box=mac?'<label class="nm"><input type="checkbox" data-act="avoid" data-device="'+d+'" data-server="'+esc(mac.id)+'"'+(avoid.includes(mac.id)?' checked':'')+'>Not my Mac</label>':'';
+      const mac=gs.find(g=>/home mac/i.test(g.name));
+      const box=mac?'<label class="nm"><input type="checkbox" data-act="avoid" data-device="'+d+'" data-server="'+esc(mac.rep)+'"'+(avoid.some(x=>mac.ids.includes(x))?' checked':'')+'>Not my Mac</label>':'';
       const reset=rule?'<button data-act="clear-device" data-device="'+d+'">Reset</button>':'';
       return '<div class="rt"><span class="rl">Server</span><select data-act="assign" data-device="'+d+'" aria-label="Server for '+esc(w.name)+'">'+opts+'</select>'+box+reset+'</div>';
     }

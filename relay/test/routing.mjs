@@ -63,11 +63,13 @@ const policy = () => JSON.parse(kv.m.get('policy')?.value || '{}');
 const beat = (id, extra = {}) => req('/presence', { method: 'POST',
   body: { id, name: 'Viewer', title: 'Show', kind: 'Series', platform: 'iPhone', paused: false, ...extra } });
 
-// Fleet. Shared rank (least loaded first): oracle (0/4), home (1/4), pc (2/4).
-for (const [id, name, load] of [['home', 'Home Mac', 1], ['oracle', 'Oracle', 0], ['pc', 'Friend PC', 2]]) {
-  assert.equal((await register(id, name, load)).status, 200);
-}
-const SHARED = ['oracle', 'home', 'pc'];
+// Fleet. Home Mac registers two paths under one name (LAN "home" + Tailscale
+// "home-ts"), as SlimeWatchExtractor/heartbeat.js does. Shared rank (least
+// loaded first): oracle (0/4), home (1/4), home-ts (1/4), pc (2/4).
+const FLEET = [['home', 'Home Mac', 1], ['home-ts', 'Home Mac', 1], ['oracle', 'Oracle', 0], ['pc', 'Friend PC', 2]];
+async function registerAll() { for (const [id, name, load] of FLEET) assert.equal((await register(id, name, load)).status, 200); }
+await registerAll();
+const SHARED = ['oracle', 'home', 'home-ts', 'pc'];
 
 // ── /route without a device (or with one that has no policy) is unchanged ──
 assert.deepEqual(await route(), { list: SHARED, note: null });
@@ -98,22 +100,22 @@ for (const [body, why] of [
 assert.equal(Object.keys(policy().devices || {}).length, 0, 'rejected actions wrote nothing');
 assert.equal((await act({ action: 'assign', device: 'x'.repeat(80), server: null })).status, 200, '80 chars is allowed');
 
-// ── Pin: the pinned server first, then the shared ranking ──
+// ── Pin is EXCLUSIVE while the pinned server is up ──
 let r = await act({ action: 'assign', device: 'dev-1', server: 'pc' });
 assert.equal(r.status, 200);
 const body1 = await r.json();
 assert.equal(body1.policy.devices['dev-1'].server, 'pc');
 assert.deepEqual(body1.policy.devices['dev-1'].avoid, []);
 assert.ok(body1.policy.devices['dev-1'].seenAt > 0);
-assert.deepEqual(await route('dev-1'), { list: ['pc', 'oracle', 'home'], note: null });
+assert.deepEqual(await route('dev-1'), { list: ['pc'], note: null });
 assert.deepEqual(await route(), { list: SHARED, note: null }, 'other callers unaffected');
 assert.deepEqual(await route('dev-2'), { list: SHARED, note: null });
 
-// ── Avoid: removed from that device's list ──
+// ── Avoid doesn't touch a live pin; it shapes the fallback ──
 assert.equal((await act({ action: 'avoid', device: 'dev-1', server: 'home' })).status, 200);
-assert.deepEqual(await route('dev-1'), { list: ['pc', 'oracle'], note: null });
+assert.deepEqual(await route('dev-1'), { list: ['pc'], note: null });
 
-// ── Pinned server disabled, then down: fall through to the (avoid-filtered) list ──
+// ── Pin down → the normal list minus avoids (both Home Mac paths: same name) ──
 assert.equal((await act({ action: 'disable', id: 'pc' })).status, 200);
 assert.deepEqual(await route('dev-1'), { list: ['oracle'], note: null });
 assert.equal(policy().devices['dev-1'].server, 'pc', 'a fleet action keeps device rules');
@@ -121,28 +123,43 @@ assert.equal((await act({ action: 'enable', id: 'pc' })).status, 200);
 kv.m.delete('srv:pc');   // heartbeat expired
 assert.deepEqual(await route('dev-1'), { list: ['oracle'], note: null });
 assert.equal((await register('pc', 'Friend PC', 2)).status, 200);
-assert.deepEqual(await route('dev-1'), { list: ['pc', 'oracle'], note: null });
+assert.deepEqual(await route('dev-1'), { list: ['pc'], note: null }, 'back up → exclusive again');
 
 // ── A pin beats the fleet-wide Prefer for that device only ──
 assert.equal((await act({ action: 'prefer', id: 'home' })).status, 200);
-assert.deepEqual(await route(), { list: ['home', 'oracle', 'pc'], note: null });
-assert.deepEqual(await route('dev-1'), { list: ['pc', 'oracle'], note: null });
+assert.deepEqual(await route(), { list: ['home', 'oracle', 'home-ts', 'pc'], note: null });
+assert.deepEqual(await route('dev-1'), { list: ['pc'], note: null });
 assert.equal((await act({ action: 'unprefer' })).status, 200);
 
+// ── A pin covers every path of a multi-path server, in rank order ──
+assert.equal((await act({ action: 'assign', device: 'dev-mac', server: 'home' })).status, 200);
+assert.deepEqual(await route('dev-mac'), { list: ['home', 'home-ts'], note: null });
+assert.equal((await act({ action: 'assign', device: 'dev-mac', server: 'home-ts' })).status, 200);
+assert.deepEqual(await route('dev-mac'), { list: ['home', 'home-ts'], note: null }, 'pinning either id pins the server');
+assert.equal((await act({ action: 'disable', id: 'home' })).status, 200);
+assert.deepEqual(await route('dev-mac'), { list: ['home-ts'], note: null }, 'a disabled path drops out of the pin');
+assert.equal((await act({ action: 'disable', id: 'home-ts' })).status, 200);
+assert.deepEqual(await route('dev-mac'), { list: ['oracle', 'pc'], note: null }, 'whole pin disabled → normal list');
+assert.equal((await act({ action: 'enable', id: 'home' })).status, 200);
+assert.equal((await act({ action: 'enable', id: 'home-ts' })).status, 200);
+assert.equal((await act({ action: 'clear-device', device: 'dev-mac' })).status, 200);
+
 // ── Avoiding everything: availability beats policy ──
-for (const s of SHARED) assert.equal((await act({ action: 'avoid', device: 'dev-2', server: s })).status, 200);
+for (const s of ['oracle', 'home', 'pc']) assert.equal((await act({ action: 'avoid', device: 'dev-2', server: s })).status, 200);
+assert.equal((await act({ action: 'avoid', device: 'dev-2', server: 'home-ts' })).status, 200);
+assert.deepEqual(policy().devices['dev-2'].avoid, ['oracle', 'home', 'pc'], 'a sibling of an avoided server is already avoided');
 assert.deepEqual(await route('dev-2'), { list: SHARED, note: 'avoid-exhausted' });
-// ...but a live pin with everything else avoided is just the pin.
+// ...a live pin with everything else avoided is just the pin.
 assert.equal((await act({ action: 'assign', device: 'dev-3', server: 'oracle' })).status, 200);
 assert.equal((await act({ action: 'avoid', device: 'dev-3', server: 'home' })).status, 200);
 assert.equal((await act({ action: 'avoid', device: 'dev-3', server: 'pc' })).status, 200);
 assert.deepEqual(await route('dev-3'), { list: ['oracle'], note: null });
 // ...and once that pin is down too, nothing is left: full list + note.
 kv.m.delete('srv:oracle');
-assert.deepEqual(await route('dev-3'), { list: ['home', 'pc'], note: 'avoid-exhausted' });
+assert.deepEqual(await route('dev-3'), { list: ['home', 'home-ts', 'pc'], note: 'avoid-exhausted' });
 assert.equal((await register('oracle', 'Oracle', 0)).status, 200);
 
-// ── Pin/avoid of the same server replace each other ──
+// ── Pin/avoid of the same server (or a sibling path) replace each other ──
 assert.equal((await act({ action: 'avoid', device: 'dev-4', server: 'pc' })).status, 200);
 assert.equal((await act({ action: 'assign', device: 'dev-4', server: 'pc' })).status, 200);
 assert.deepEqual(policy().devices['dev-4'], { ...policy().devices['dev-4'], server: 'pc', avoid: [] });
@@ -151,9 +168,15 @@ assert.equal(policy().devices['dev-4'].server, null);
 assert.deepEqual(policy().devices['dev-4'].avoid, ['pc']);
 assert.equal((await act({ action: 'avoid', device: 'dev-4', server: 'pc' })).status, 200, 'avoid is idempotent');
 assert.deepEqual(policy().devices['dev-4'].avoid, ['pc']);
-// unavoid of the last rule leaves nothing: the entry goes (Automatic).
 assert.equal((await act({ action: 'unavoid', device: 'dev-4', server: 'pc' })).status, 200);
-assert.equal(policy().devices['dev-4'], undefined);
+assert.equal(policy().devices['dev-4'], undefined, 'unavoid of the last rule leaves Automatic');
+assert.equal((await act({ action: 'avoid', device: 'dev-4', server: 'home-ts' })).status, 200);
+assert.equal((await act({ action: 'assign', device: 'dev-4', server: 'home' })).status, 200);
+assert.deepEqual([policy().devices['dev-4'].server, policy().devices['dev-4'].avoid], ['home', []], 'pinning a sibling clears its avoid');
+assert.equal((await act({ action: 'avoid', device: 'dev-4', server: 'home-ts' })).status, 200);
+assert.deepEqual([policy().devices['dev-4'].server, policy().devices['dev-4'].avoid], [null, ['home-ts']], 'avoiding a sibling unpins');
+assert.equal((await act({ action: 'unavoid', device: 'dev-4', server: 'home' })).status, 200);
+assert.equal(policy().devices['dev-4'], undefined, 'unavoid clears every path of the server');
 // unavoid accepts a retired server that is still in the avoid list.
 assert.equal((await act({ action: 'avoid', device: 'dev-5', server: 'pc' })).status, 200);
 kv.m.delete('srv:pc');
@@ -165,14 +188,15 @@ assert.equal((await act({ action: 'assign', device: 'dev-6', server: 'pc' })).st
 assert.equal((await act({ action: 'avoid', device: 'dev-6', server: 'home' })).status, 200);
 assert.equal((await act({ action: 'assign', device: 'dev-6', server: null })).status, 200);
 assert.deepEqual([policy().devices['dev-6'].server, policy().devices['dev-6'].avoid], [null, ['home']]);
+assert.deepEqual(await route('dev-6'), { list: ['oracle', 'pc'], note: null });
 assert.equal((await act({ action: 'clear-device', device: 'dev-6' })).status, 200);
 assert.equal(policy().devices['dev-6'], undefined);
 assert.equal((await act({ action: 'clear-device', device: 'never-set' })).status, 200, 'clearing nothing is fine');
 // Prototype-ish ids are plain keys.
 assert.equal((await act({ action: 'assign', device: '__proto__', server: 'pc' })).status, 200);
-assert.equal((await act({ action: 'assign', device: 'constructor', server: 'home' })).status, 200);
-assert.deepEqual(await route('__proto__'), { list: ['pc', 'oracle', 'home'], note: null });
-assert.deepEqual(await route('constructor'), { list: ['home', 'oracle', 'pc'], note: null });
+assert.equal((await act({ action: 'assign', device: 'constructor', server: 'oracle' })).status, 200);
+assert.deepEqual(await route('__proto__'), { list: ['pc'], note: null });
+assert.deepEqual(await route('constructor'), { list: ['oracle'], note: null });
 assert.deepEqual(await route('toString'), { list: SHARED, note: null });
 assert.equal((await act({ action: 'clear-device', device: '__proto__' })).status, 200);
 assert.equal((await act({ action: 'clear-device', device: 'constructor' })).status, 200);
@@ -182,7 +206,7 @@ assert.equal(Object.getPrototypeOf(policy()), Object.prototype);
 r = await req('/servers', { token: 'admin' });
 assert.equal(r.status, 200);
 const fleetView = await r.json();
-assert.equal(fleetView.servers.length, 3);
+assert.equal(fleetView.servers.length, 4);
 assert.deepEqual(Object.keys(fleetView.devices).sort(), ['dev-1', 'dev-2', 'dev-3'], 'Automatic-with-no-avoid devices are not stored');
 assert.equal(fleetView.devices['dev-1'].server, 'pc');
 assert.deepEqual(fleetView.devices['dev-1'].avoid, ['home']);
@@ -226,10 +250,10 @@ assert.equal(policyPuts(), policyPutsBefore, 'presence beats never write the pol
 // ── Pruning: 30 days with no presence and no owner change ──
 // dev-1 keeps beating; dev-2 / dev-3 / the 80-char device go quiet.
 skew = 20 * DAY;
-for (const s of SHARED) await register(s, { home: 'Home Mac', oracle: 'Oracle', pc: 'Friend PC' }[s], 0);
+await registerAll();
 await beat('dev-1');   // > 6 h since the last seen write: refreshes seen:dev-1
 skew = 31 * DAY;
-for (const s of SHARED) await register(s, { home: 'Home Mac', oracle: 'Oracle', pc: 'Friend PC' }[s], 0);
+await registerAll();
 assert.equal((await act({ action: 'unprefer' })).status, 200);   // any owner write folds + prunes
 let devs = policy().devices;
 assert.deepEqual(Object.keys(devs).sort(), ['dev-1'], 'quiet devices pruned, the beating one kept');
@@ -237,7 +261,7 @@ assert.ok(devs['dev-1'].seenAt >= realNow() + 20 * DAY - 60_000, 'seenAt folded 
 // An owner change counts as a touch even with no presence yet.
 assert.equal((await act({ action: 'assign', device: 'new-dev', server: 'oracle' })).status, 200);
 skew = 55 * DAY;   // seen:dev-1 (written at day 20, 30-day TTL) has now expired
-for (const s of SHARED) await register(s, { home: 'Home Mac', oracle: 'Oracle', pc: 'Friend PC' }[s], 0);
+await registerAll();
 assert.equal((await act({ action: 'unprefer' })).status, 200);
 devs = policy().devices;
 assert.deepEqual(Object.keys(devs).sort(), ['new-dev'], 'dev-1 pruned 30+ days after its last beat; new-dev (touched day 31) kept');
@@ -252,9 +276,8 @@ assert.equal((await act({ action: 'unprefer' })).status, 200);
 assert.deepEqual(Object.keys(policy().devices), ['new-dev']);
 assert.equal((await act({ action: 'clear-device', device: 'new-dev' })).status, 200);
 skew = 0;
-for (const s of SHARED) kv.m.delete(`srv:${s}`);
-for (const k of [...kv.m.keys()]) if (k.startsWith('pres:') || k.startsWith('seen:')) kv.m.delete(k);
-await register('home', 'Home Mac', 1); await register('oracle', 'Oracle', 0); await register('pc', 'Friend PC', 2);
+for (const k of [...kv.m.keys()]) if (/^(srv|pres|seen):/.test(k)) kv.m.delete(k);
+await registerAll();
 
 // ── Dashboard: run the page's own script against the worker ──
 async function renderDashboard() {
@@ -284,7 +307,7 @@ const selectFor = (html, device) => {
 const selectedValue = (opts) => [...opts.matchAll(/<option value="([^"]*)"( selected)?>/g)].filter((o) => o[2]).map((o) => o[1]);
 
 assert.equal((await act({ action: 'assign', device: 'dev-1', server: 'pc' })).status, 200);
-assert.equal((await act({ action: 'avoid', device: 'dev-2', server: 'home' })).status, 200);
+assert.equal((await act({ action: 'avoid', device: 'dev-2', server: 'home-ts' })).status, 200);   // the Mac's other path
 await beat('dev-1', { name: 'Ann', server: 'Friend PC' });
 await beat('dev-2', { name: 'Bob', server: 'Home Mac' });
 await beat('dev-3', { name: 'Cy' });
@@ -298,11 +321,13 @@ let w = d.els.watchers.innerHTML;
 assert.deepEqual(selectedValue(selectFor(w, 'dev-1')), ['pc']);
 assert.deepEqual(selectedValue(selectFor(w, 'dev-2')), ['']);
 assert.deepEqual(selectedValue(selectFor(w, 'dev-3')), ['']);
+// One option per server NAME (Home Mac's two paths are one entry, sent by its first id).
 assert.match(selectFor(w, 'dev-1'), /<option value="">Automatic<\/option><option value="pc" selected>Friend PC<\/option><option value="home">Home Mac<\/option><option value="oracle">Oracle<\/option>/);
+assert.equal(selectFor(w, 'dev-3').match(/Home Mac/g).length, 1);
 assert.match(w, /via Friend PC/);
 assert.match(w, /via Home Mac/);
 // "Not my Mac" resolves to the Home Mac server id; checked only where avoided.
-assert.match(w, /<input type="checkbox" data-act="avoid" data-device="dev-2" data-server="home" checked>Not my Mac/);
+assert.match(w, /<input type="checkbox" data-act="avoid" data-device="dev-2" data-server="home" checked>Not my Mac/, 'checked when any Mac path is avoided');
 assert.match(w, /<input type="checkbox" data-act="avoid" data-device="dev-1" data-server="home">Not my Mac/);
 assert.match(w, /data-act="clear-device" data-device="dev-1"/);
 assert.ok(!/data-act="clear-device" data-device="dev-3"/.test(w), 'no Reset without a policy');
@@ -345,6 +370,11 @@ for (let i = 0; i < 100 && !policy().disabled.includes('pc'); i++) await new Pro
 assert.deepEqual(policy().disabled, ['pc']);
 await act({ action: 'enable', id: 'pc' });
 
+// A pin to a server's second path selects that server's single entry.
+assert.equal((await act({ action: 'assign', device: 'dev-1', server: 'home-ts' })).status, 200);
+d = await renderDashboard();
+assert.match(selectFor(d.els.watchers.innerHTML, 'dev-1'), /<option value="home-ts" selected>Home Mac<\/option>/);
+assert.equal(selectFor(d.els.watchers.innerHTML, 'dev-1').match(/Home Mac/g).length, 1);
 // A pin to an offline server stays visible as the selected option.
 assert.equal((await act({ action: 'assign', device: 'dev-2', server: 'pc' })).status, 200);
 kv.m.delete('srv:pc');
@@ -353,6 +383,9 @@ assert.deepEqual(selectedValue(selectFor(d.els.watchers.innerHTML, 'dev-2')), ['
 assert.match(d.els.watchers.innerHTML, /<option value="pc" selected>pc \(offline\)<\/option>/);
 // No "Home Mac" in the fleet → no "Not my Mac" checkbox.
 kv.m.delete('srv:home');
+d = await renderDashboard();
+assert.match(d.els.watchers.innerHTML, /data-server="home-ts"/, 'the remaining Mac path stands in');
+kv.m.delete('srv:home-ts');
 d = await renderDashboard();
 assert.ok(!/Not my Mac/.test(d.els.watchers.innerHTML));
 assert.ok(selectFor(d.els.watchers.innerHTML, 'dev-1'), 'the Server select stays');

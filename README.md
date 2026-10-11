@@ -95,8 +95,9 @@ It ends by printing your dashboard URL.
 - **Admin dashboard:** `https://…workers.dev/?key=<ADMIN_TOKEN>` — see every server,
   and **Disable / Enable / Prefer** any of them. Changes apply to every device at once.
   Under **Now Watching**, each viewer shows the server it's playing through and a
-  **Server** picker for that device alone: *Automatic* or one server (tried first;
-  if it's down or disabled the device falls back to the normal list), plus
+  **Server** picker for that device alone: *Automatic* or one server (the device
+  gets only that server while it's up; if it's down or disabled it falls back to
+  the normal list), plus
   **Not my Mac** to keep that device off the server named "Home Mac". A device
   that would be left with no server gets the full list anyway. Changes apply on the
   device's next play; a device's rule is dropped after 30 days without it watching.
