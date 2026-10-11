@@ -1,0 +1,89 @@
+/* Player overlay: bar, stage (<video> + embed <iframe>), loading, hint, badge, Up Next. */
+/* Player */
+.player{position:fixed;inset:0;z-index:80;background:#000;display:none;flex-direction:column}
+.player.open{display:flex}
+.player .bar{display:flex;align-items:center;gap:14px;padding:10px 16px;background:#0a0d0b;color:var(--txt)}
+.player .bar .pt{font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.player select{background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:10px;
+  padding:8px 12px;font-size:14px}
+.player .x{background:var(--panel);color:#fff;border:1px solid var(--line);border-radius:10px;
+  padding:8px 14px;cursor:pointer;font-weight:700}
+.player .stage{flex:1;position:relative;background:#000;min-height:0}
+.player .stage video,.player .stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000}
+.player .ploading{position:absolute;inset:0;display:none;place-items:center;text-align:center;
+  color:var(--dim);font-size:15px;background:#000;padding:0 24px}
+.player .ploading.on{display:grid}
+.player .hint{padding:6px 16px;font-size:12px;color:var(--dim2);background:#0a0d0b}
+.player .hint b{color:var(--accent)}
+.pbadge{font-size:11px;font-weight:800;letter-spacing:1px;color:var(--accent);
+  background:rgba(55,226,154,.14);border:1px solid rgba(55,226,154,.4);padding:3px 9px;border-radius:20px}
+.player .upnext{position:absolute;right:18px;bottom:18px;background:rgba(10,13,11,.92);
+  border:1px solid var(--line);border-radius:12px;padding:10px 16px;font-size:14px;font-weight:700;
+  color:var(--txt);opacity:0;transform:translateY(8px);transition:.3s;pointer-events:none}
+.player .upnext.on{opacity:1;transform:none}
+.player .upnext b{color:var(--accent)}
+
+/* ── Player parity (W2): SUB/DUB badge + switch, captions, skip, converter bar ── */
+.player .bar .pt{min-width:0}
+.pbadge.paudio{color:#ffd166;background:rgba(255,209,102,.12);border-color:rgba(255,209,102,.4)}
+.player .paudiosw{display:inline-flex;gap:0;padding:0;overflow:hidden}
+.player .paudiosw span{padding:8px 10px;color:var(--dim)}
+.player .paudiosw span.on{background:rgba(55,226,154,.16);color:var(--accent)}
+
+/* Caption overlay (Safari native HLS / no VTTCue) and native cues. */
+.player .psubs{position:absolute;left:50%;bottom:64px;transform:translateX(-50%);z-index:3;
+  max-width:min(92%,980px);text-align:center;white-space:pre-line;pointer-events:none;
+  font-size:clamp(16px,2.6vw,30px);line-height:1.3;font-weight:600;color:#fff;
+  background:rgba(0,0,0,.62);border-radius:6px;padding:4px 12px;display:none;
+  text-shadow:0 1px 2px #000}
+.player .psubs.on{display:block}
+#pvideo::cue{background:rgba(0,0,0,.62);color:#fff;font-size:clamp(16px,2.4vw,28px);line-height:1.3}
+/* prefs.subSize (Settings): S / M (default) / L, on both renderers. */
+#pvideo[data-subsize="S"]::cue{font-size:clamp(13px,1.8vw,22px)}
+#pvideo[data-subsize="L"]::cue{font-size:clamp(20px,3.3vw,40px)}
+.player .psubs[data-size="S"]{font-size:clamp(13px,2vw,22px)}
+.player .psubs[data-size="L"]{font-size:clamp(20px,3.6vw,42px)}
+
+/* CC button + menu: on the stage, so they stay reachable in stage fullscreen. */
+.player .pcc{position:absolute;top:12px;right:12px;z-index:4;cursor:pointer;
+  background:rgba(10,13,11,.72);color:#fff;border:1px solid var(--line);border-radius:8px;
+  padding:6px 10px;font-weight:800;font-size:13px;letter-spacing:.5px;opacity:.6;transition:opacity .2s}
+.player .stage:hover .pcc,.player .pcc:focus-visible,.player .pcc.on{opacity:1}
+.player .pcc.on{border-color:rgba(55,226,154,.6);color:var(--accent)}
+.player .pccmenu{position:absolute;top:50px;right:12px;z-index:5;display:none;
+  min-width:220px;max-width:min(320px,calc(100% - 24px));max-height:calc(100% - 70px);overflow:auto;
+  background:rgba(14,18,15,.97);border:1px solid var(--line);border-radius:12px;padding:6px;
+  box-shadow:0 12px 32px rgba(0,0,0,.55)}
+.player .pccmenu.on{display:block}
+.player .pccmenu .cchead{font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--dim);padding:6px 10px}
+.player .pccmenu .ccrow{display:block;width:100%;text-align:left;background:none;border:0;color:var(--txt);
+  font:inherit;font-size:14px;padding:8px 10px;border-radius:8px;cursor:pointer}
+.player .pccmenu .ccrow:hover{background:rgba(255,255,255,.06)}
+.player .pccmenu .ccrow.on{color:var(--accent);font-weight:700}
+.player .pccmenu .ccrow.on::before{content:"✓ "}
+.player .pccmenu .ccn{color:var(--dim);font-size:12px;font-weight:500}
+.player .pccmenu .ccnote{color:var(--dim);font-size:12px;padding:6px 10px}
+.player .pccmenu .ccoff{display:flex;align-items:center;gap:8px;padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:4px;font-size:13px;color:var(--dim)}
+.player .pccmenu .ccoff span{flex:1}
+.player .pccmenu .ccoff b{color:var(--txt);min-width:52px;text-align:center}
+.player .pccmenu .ccoff button{background:var(--panel);color:#fff;border:1px solid var(--line);border-radius:8px;padding:4px 10px;cursor:pointer;font-weight:700}
+
+/* Skip intro / outro. */
+.player .pskip{position:absolute;right:18px;bottom:72px;z-index:4;display:none;cursor:pointer;
+  background:rgba(10,13,11,.9);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:10px;
+  padding:10px 16px;font-weight:800;font-size:14px}
+.player .pskip.on{display:block}
+.player .pskip:hover{border-color:var(--accent);color:var(--accent)}
+
+/* Converter position bar: a rolling HLS can't drive the native seek bar. */
+.player .pvtbar{display:flex;align-items:center;gap:10px;padding:6px 16px;background:#0a0d0b;color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.player .pvtbar input{flex:1;accent-color:var(--accent);min-width:0}
+
+@media(max-width:700px){
+  .player .bar{gap:8px;padding-left:10px;padding-right:10px}
+  .player .bar label{display:none}
+  .player select{max-width:34vw}
+  .player .paudiosw span{padding:8px 7px;font-size:12px}
+  .player .psubs{bottom:56px}
+  .player .pskip{bottom:60px;right:12px}
+}

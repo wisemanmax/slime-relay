@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SlimeWatch</title>
+<meta name="theme-color" content="#0a0d0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SlimeWatch">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!--BUILD:CSS-->
+</head>
+<body>
+  <!-- The app shell. No inline JS or CSS here: build.mjs replaces the two
+       BUILD markers with the bundled stylesheet and scripts. Clicks are wired
+       with data-act="<action>" (see ui/actions.js), never onclick. -->
+  <header>
+    <div class="brand">SLIME<span>WATCH</span></div>
+    <nav id="nav"></nav>
+    <div class="search-box">
+      <span style="color:var(--dim)">⌕</span>
+      <input id="q" placeholder="Search…" autocomplete="off">
+    </div>
+    <span class="logout desktop" data-act="settings" title="Debrid settings" style="font-size:18px;line-height:1">⚙</span>
+    <span class="logout desktop" data-act="logout">Sign out</span>
+    <!-- Phone-only header cluster, mirroring the app: dice, profile, settings. -->
+    <div class="hdr-icons">
+      <span class="ic" title="Surprise me" data-act="surprise">🎲</span>
+      <span class="ic me" title="Sign out" data-act="logout">🍿</span>
+      <span class="ic" title="Settings" data-act="settings">⚙</span>
+    </div>
+  </header>
+  <div class="pills-row" id="pills"></div>
+  <main id="main"></main>
+  <!-- Floating tab bar (phones only). Five tabs (Home, Search, Live, Read, My Stuff); the rest has no
+       Reading section — Movies/Series/Anime live in the pills, exactly as they
+       do on iOS Home. -->
+  <nav id="tabbar"></nav>
+
+  <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+  <div class="modal" id="setmodal"><div class="sheet" id="setsheet" style="max-width:540px;margin-top:70px"></div></div>
+  <div class="player" id="player">
+    <div class="bar">
+      <span class="pt" id="ptitle"></span>
+      <span class="pbadge" id="pbadge" style="display:none">⚡ DEBRID</span>
+      <label style="color:var(--dim);font-size:13px">Source</label>
+      <select id="psel"></select>
+      <button class="x" id="ppip" data-act="player-pip" title="Picture in Picture" style="display:none">⧉ PiP</button>
+      <button class="x" id="pfs" data-act="player-fullscreen" title="Fullscreen (f)">⛶ Fullscreen</button>
+      <button class="x" data-act="player-close" title="Close (Esc)">✕ Close</button>
+    </div>
+    <div class="stage">
+      <video id="pvideo" controls playsinline preload="auto" style="display:none"></video>
+      <!-- NO sandbox attribute, deliberately. Tested: VidLink and VidFast detect it
+           and render "Please Disable Sandbox" instead of playing, and VidFast
+           refuses even the narrow form that keeps allow-popups. These providers
+           monetise through popups, so blocking them blocks playback. Ads are
+           dealt with by NOT loading their page — the ad-free extractor tier — and
+           by a browser content blocker for the times an embed is the only option. -->
+      <iframe id="pframe" allowfullscreen
+              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+              referrerpolicy="no-referrer" style="display:none"></iframe>
+      <div class="ploading on" id="ploading">Finding the best source…</div>
+      <div class="upnext" id="pupnext"></div>
+    </div>
+    <div class="hint" id="phint"></div>
+  </div>
+  <!-- Toast stack (update notice, install hint); must stay AFTER #player — the
+       CSS moves it to the top while the player is open via .player.open ~ .toasts -->
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+<!--BUILD:JS-->
+</body></html>

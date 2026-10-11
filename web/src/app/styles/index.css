@@ -1,0 +1,10 @@
+/* Cascade order of the app's stylesheet. build.mjs bundles this file (esbuild
+   inlines each @import in place) into the page's single <style>. The first four
+   are the original single-file CSS, moved verbatim and in its original order;
+   add new files at the END so they cannot change how existing rules resolve. */
+@import "./base.css";
+@import "./layout.css";
+@import "./player.css";
+@import "./phone.css";
+@import "./overlays.css";
+@import "./reader.css";

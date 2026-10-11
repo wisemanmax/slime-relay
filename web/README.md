@@ -2,10 +2,12 @@
 
 A private, password-gated web version of SlimeWatch — a Cloudflare Worker that
 serves a single-page app: browse the TMDB catalog (Home / Movies / TV / Anime /
-Search / My List), open a detail page with a season/episode picker, and watch via
-provider-embed iframes with a source switcher. Continue Watching + My List live in
-your browser. The TMDB token stays server-side (the Worker proxies it), and the
-whole site sits behind a password.
+Channels / Genres / Search / My List), Live TV + Sports, a detail sheet with a
+season/episode picker, and a player whose ladder mirrors the apps: your own
+Real-Debrid HD first, then an ad-free stream pulled by the extractor, then
+provider-embed iframes. Continue Watching + My List live in your browser. The
+TMDB token stays server-side (the Worker proxies it), and the whole site sits
+behind a password. It installs as an app (PWA) on iPhone, Android and desktop.
 
 ## Deploy (once)
 
@@ -16,21 +18,334 @@ cd web
 # ./deploy.sh "your-password" "your-tmdb-v4-token"
 ```
 
-It installs wrangler, logs you into Cloudflare (browser once), sets three secrets,
-and deploys. Wrangler prints your URL, e.g. `https://slime-web.<you>.workers.dev`.
-Open it, enter your password, and you're in.
+It installs dependencies, logs you into Cloudflare (browser once), sets three
+secrets, builds + checks, and deploys. Later deploys: `npm run deploy` (build →
+check → `wrangler deploy`). The generated files are committed, so a bare
+`npx wrangler deploy` also works — but `npm run deploy` refuses to ship a stale
+or broken build.
 
-### Secrets it sets
+### Custom domain: watch.byheir.com
+`wrangler.toml` routes the Worker to **https://watch.byheir.com** as a Cloudflare
+*custom domain* (`custom_domain = true`). byheir.com is a zone on the same
+Cloudflare account, so **the first deploy creates the DNS record and the
+certificate itself** — no manual DNS step. It fails if a DNS record named
+`watch` already exists in the zone; delete that record and deploy again.
+The original `https://slime-web.<account>.workers.dev` URL keeps working
+(`workers_dev = true` is explicit, because wrangler turns workers.dev off as
+soon as a route exists). Cookies are host-only and every redirect is relative,
+so login works on either host — but they are separate sites to the browser:
+you sign in once per host, and an installed app belongs to the host it was
+installed from. (`slime.byheir.com` is the extractor's tunnel; unrelated.)
+
+### Secrets
 | Secret | What |
 |---|---|
 | `SITE_PASSWORD` | the password you type to get in |
 | `SESSION_SECRET` | a random string that signs the login cookie (auto-generated) |
 | `TMDB_TOKEN` | your TMDB v4 read token, so the key never ships in the page |
+| `SLIME_TOKEN` | the extractor token (same one the apps use) → Live/Sports + the ad-free tier, and the relay token Ask sends to `/assist` |
+| `RD_KEY` | optional default Real-Debrid token, handed only to signed-in browsers |
+
+Bindings in `wrangler.toml` (not secrets): the **`STATE`** KV namespace for sync
+(`npx wrangler kv namespace create STATE`, paste its id over `PASTE_STATE_KV_ID`)
+and the **`RELAY`** service binding to the `slime-relay` Worker for Ask (it must
+be on the same Cloudflare account — otherwise delete that block and Ask uses
+`RELAY_BASE`).
+
+## Install as an app
+- **iPhone / iPad:** open the site in Safari → Share → *Add to Home Screen*. The
+  app shows this hint itself the first time (dismiss with ✕ to silence it).
+- **Chrome / Edge / Android:** an *Install* toast appears; it's also in Settings (⚙).
+- Sign in once inside the installed app (it has its own cookie jar on iOS).
+- When a new version is deployed, an **"SlimeWatch updated — Reload"** toast
+  appears; nothing reloads under you mid-film until you tap it.
+- Offline, the app shell still opens (the catalog needs the network).
+
+## Sync — the same lists on every browser
+The apps sync through iCloud; the web keeps the owner's copy in the Worker's KV
+(`STATE`, one JSON value, behind the password like everything else). My List,
+Continue Watching, reading progress and viewer prefs follow you between the
+laptop, the phone and the installed app. The RD key and the install-hint flag
+stay in each browser (`local: true` in `SCHEMA`).
+
+- **How:** `src/app/sync.js` pulls `/api/state` at boot, merges it into the
+  store, then PUTs local changes back 1.5 s after they stop (a real change is
+  never held more than 10 s). Playback position / page-turn ticks are held to
+  one PUT a minute — KV writes are metered — and anything queued is sent at once
+  when the tab is hidden or closed. Offline, changes queue (persisted, so a
+  reload doesn't lose them) and flush on `online`. Another tab's writes are not
+  re-sent. Without the KV binding the Worker answers 503 and the browser
+  quietly stays local. Settings → Sync shows synced / offline / not set up.
+- **Merge rules** (`mergeData`, shared by client and Worker): every list /
+  continue / reading entry carries `updatedAt`, stamped centrally by the store on
+  each local write; per entry, the newest wins (the server's copy on a tie). A
+  removal leaves a tombstone (`tombs`, kept 90 days) that beats any older copy,
+  so a title removed on the laptop isn't resurrected by the phone. The same
+  episode in Continue Watching keeps the further position. Each collection is
+  re-sorted newest first and capped (list 60, continue 24, reading 300). Prefs
+  merge key by key; a device keeps only its own unsent pref edits over the
+  server's copy, so a pref removed elsewhere (captions turned off) stays removed.
+- **API:** `GET /api/state` → `{rev, updatedAt, data:{list, continue, prefs,
+  reading, tombs}}`. `PUT /api/state` `{baseRev, patch}` (any of those keys) →
+  `{rev, updatedAt, data}`, or **409** `{error:'stale', rev, updatedAt, data}` when
+  `baseRev` isn't current — the client merges `data` and resends. 413 over 256 KB,
+  400 on a malformed patch. A no-op PUT doesn't write. `GET /api/state/health` →
+  `{build, sync, ask, extractor:{base, ok, status, ms, error}}` for Settings.
+- **Consistency:** KV is eventually consistent across locations (~60 s). Two
+  devices writing within a minute through different Cloudflare locations can
+  lose one write until that device's next change or boot, which always merges
+  its local copy in and uploads the difference — state converges, it doesn't fork.
+
+## Ask
+The apps' "Ask" assistant, in Search (`#search/ask`, or "✦ Ask SlimeWatch: …"
+above any header-search results): describe a mood, a plot or a half-remembered
+title; it looks things up and answers with picks shown as cards that open the
+detail sheet. Follow-up chips refine the answer; "New chat" starts over. The
+conversation lives in memory only. "Use My List & Continue Watching" (off by
+default, `prefs.askHistory`) lets it see those titles — they are sent to the
+model.
+
+- The relay's `POST /assist` holds the model key, the system prompt and the
+  tool list (`relay/src/assist.js`); `/api/ask` (`src/worker/ask.js`) forwards the
+  body unchanged with the app token (`SLIME_TOKEN`) added server-side, 20 s
+  timeout, the relay's status passed through (429 included); 504 on timeout,
+  502 if the relay refuses the token.
+- `src/app/ask.js` is a port of the apps' `AssistantSession` / `AssistantTools` /
+  `AssistantLogic`: same request (`{messages, history}`, assistant messages sent
+  back verbatim, every tool call answered by a `{role:'tool', tool_call_id,
+  content}`), same tools run against `/api/tmdb/*`, same guards (picks must come
+  from tool results, one correction for made-up ids, one nudge for 1–2 picks,
+  length promises checked against TMDB runtimes, 7 rounds / 12 lookups,
+  conversation trimmed under the relay's caps).
+
+## Reading
+The **Read** tab (fifth on the phone bar; `#read` on desktop): manga and comics,
+with Continue Reading + Saved on top, a Manga | Comics switch, search, shelves,
+series pages and a full-screen reader.
+
+| Route | What |
+|---|---|
+| `#read`, `#read/manga`, `#read/comics` | hub (`views/reading.js`) |
+| `#read/manga/<source>/<id>` · `#read/r/<source>/<id>/<chapter>` | manga series page · its reader (`views/reading-series.js`) |
+| `#read/comic/<source>/<slug>` · `#read/rc/<source>/<slug>/<chapter>` | comic series page · its reader (`views/reading-comic.js`) |
+| `#read/comics/<source>[/<publisher>]` | one comic source's grid |
+
+Segments are URI-encoded (`router.routeHash` / `routeArgs`): Mangapill ids hold a `/`.
+
+**Manga sources** — one shape for all (the extractor's `/read/*` contract), in `views/reading-api.js`:
+- **MangaDex** — its API admits CORS only from mangadex.org and localhost
+  (checked 2026-10-11), so the Worker passes an allowlist of read-only paths
+  through (`/api/read/mangadex/{manga, manga/<id>, manga/<id>/feed, chapter, at-home/server/<id>}`)
+  and the app maps the JSON. Images load straight from MangaDex with
+  `referrerpolicy="no-referrer"`: a third-party Referer gets their "read this at
+  mangadex.org" placeholder cover.
+- **Mangapill** — scraped by the Worker (`/api/read/mangapill/search|series|pages`,
+  regex over the HTML like the iOS `MangapillSource`), images via
+  `/api/read/mangapill/img?u=` (its CDN 403s without `Referer: https://mangapill.com/`;
+  only Mangapill's hosts are fetched). Works with the Mac off.
+- **Engine sources** (MANGA Plus + Suwayomi, needs the Mac) — `/api/read/sources|search|series|pages|img`
+  → the extractor's `/read/*` with `SLIME_TOKEN` as a Bearer header. The engine mints
+  image URLs as `/read/img?…&key=<token>`; every one is rewritten to
+  `/api/read/img?<same params>` without `key` (the signature doesn't cover it), and
+  every proxied body is scrubbed of the token as a backstop. `x-read-*` headers are forwarded.
+- **"Read from"** on a series page finds the same title on another source by a strict
+  title match (`views/reading-match.js`, the iOS `ReadingTitleMatch`: ≥ 75 to accept,
+  side titles like "Colored"/"Party" rejected).
+
+**Comics** (needs the Mac) — `/api/comic/sources|search|browse|detail|pages|library|img|file`
+→ `/comic/*`; page and cover URLs come back as `/api/comic/img?…` / `/api/comic/file?…`.
+GetComics and the Internet Archive download a CBZ to the Mac first: the series page's
+download card polls `/api/comic/pages` every 2 s (progress %, the server's `message`,
+Try again → `retry=1` when `retryable` isn't false), then opens the reader.
+
+**Reader** (`reader/`) — paged left-to-right / right-to-left (manga default),
+vertical, long strip (picked when the source says webtoon or most of the first 4
+pages are taller than 2:1; a mode chosen by hand sticks per title). Tap zones
+(thirds; the middle shows the bars), swipe, ←/→, space, f fullscreen, Esc back to
+the series page; pinch-zoom is the browser's. Next 3 pages prefetched; an
+end-of-chapter card offers the next chapter; changing chapter rewrites the hash in
+place so Back always lands on the series page.
+
+**Progress** lives in the store's synced `reading` key (`reader/progress.js`), keyed
+`<source>:<id>`: `{title, cover, chapter, page, updatedAt, saved}` plus `kind, source,
+id, comic, chapterLabel, chapterNum, pages, readAt, savedAt, mode`. Written on every
+page turn (debounced 0.7 s), on close and when the tab hides. A finished chapter
+resumes at the next one; a title read on another source resumes by chapter number.
+
+Worker deadlines (`src/worker/reading.js` `T`): 15 s for sources/library/MangaDex/Mangapill,
+23 s all-sources search, 28 s one-source search, 48 s series, 33 s pages, 25 s comic
+lists, 45 s comic pages — each just past the extractor's own (docs/READING-ENGINE.md),
+so a slow engine still answers instead of being cut off. Tests: `test/reading.mjs`
+(fixtures in `test/fixtures/`, saved 2026-10-11).
+
+## Develop
+
+```bash
+npm install
+npm test        # build + check.mjs (artifact guards, Worker routes, unit checks)
+npm run dev     # build + wrangler dev on http://127.0.0.1:8797
+```
+To log in locally pass throwaway values, e.g.
+`npm run dev -- --var SITE_PASSWORD:dev --var SESSION_SECRET:dev`.
+**Don't move dev to port 8787** (wrangler's default): the SlimeWatch extractor
+listens on `*:8787` on the home Mac, and a dev server bound to `127.0.0.1:8787`
+silently steals its loopback traffic. `[dev] port = 8797` in wrangler.toml.
+
+After changing anything in `src/app/`, run `npm run build` (or `npm test`) and
+commit `src/generated/` with it — deploys ship the generated files.
+
+## Structure
+
+```
+web/
+  src/worker.js            the Worker: password gate, /api/* proxies, PWA files, the page (+ CSP)
+  src/app/                 the SPA source (ES modules) — edit here
+  src/generated/           build output, committed — never edit
+    page.js                  PAGE (the whole app as one HTML string), BUILD_ID, NONCE_PLACEHOLDER
+    static.js                STATIC: /sw.js, /manifest.webmanifest, /icons/* (served ungated)
+  build.mjs                esbuild bundle -> src/generated/ (deterministic; no timestamps)
+  check.mjs                guards + runs test/*.mjs  (npm test = build + check)
+  test/unit.mjs            store, router, debrid pickers
+  test/sw.mjs              service-worker behaviour (vm sandbox, fake caches/network)
+  test/pwa.mjs             page-side update flow (fake DOM + navigator.serviceWorker)
+  test/sync.mjs            store stamps/tombstones, merge rules, /api/state (fake KV), the sync
+                           engine on a fake clock against the real handler (two devices converge)
+  test/ask.mjs             Ask logic + tool loop (fake relay/TMDB), /api/ask proxy, Settings/Search wiring
+  test/reading.mjs         Read tab: Mangapill parsers + MangaDex mapping on saved answers (test/fixtures/),
+                           /api/read + /api/comic routes (scripted upstream), reader rules, progress, tab width
+  src/worker/              feature route modules behind the gate (modules.js registers them):
+    sync.js                  /api/state, /api/state/health          ask.js   /api/ask -> relay /assist
+    reading.js               /api/read/*, /api/comic/* (engine + comics proxy, Mangapill, MangaDex passthrough)
+  scripts/icons.mjs        regenerates src/app/icons/*.png (stdlib PNG encoder; `npm run icons`)
+```
+
+### `src/app/`
+| Path | Owns |
+|---|---|
+| `index.html` | the shell markup only. No inline JS/CSS/handlers — `<!--BUILD:CSS-->` / `<!--BUILD:JS-->` are replaced by the build |
+| `main.js` | boot order + the route → view table (`VIEWS`) |
+| `router.js` | pure: `parseRoute(hash)` → `{base, arg, active, nav, tab, pills}`, `KNOWN` routes, `tabFor`, `go(hash)` |
+| `api.js` | every call to the Worker: `apiFetch` (login-bounce detection → /login), `api(tmdbPath)`, `rdCheck`, `rdKeyFromSite`, `resolveEmbed`, `liveChannels`, `liveResolve`, `debridFallback` |
+| `state.js` | **the store** (below) + domain helpers: My List, Continue Watching, RD key, prefs (`getPrefs`/`setPrefs`), reading entries |
+| `sync.js` | personal sync: the merge rules (shared with the Worker) + the client engine (`initSync`, `syncStatus`, `onSyncStatus`, `syncNow`) |
+| `ask.js` | the Ask assistant: tool loop over the relay + TMDB (`askSession`, `createAsk`) |
+| `catalog.js` | brand channels, movie genres, `provQ` discover-query builder |
+| `util.js` | `IMG`, `kindOf`, `titleOf`, `yearOf`, `esc`, `$` |
+| `keys.js` | global keyboard: Esc, `/`, and dispatch to the player shortcuts |
+| `pwa.js` | service-worker registration + the "Updated" toast |
+| `sw.js` | the service worker (build stamps the version + asset list) |
+| `manifest.webmanifest`, `icons/` | PWA metadata and icons |
+| `views/home.js` | Home (hero, Continue Watching, My List, shelves), surprise, resume |
+| `views/browse.js` | Movies / TV / Anime shelves, Channels grid, one channel, genre browse |
+| `views/search.js` | header search (desktop), the Search screen with its Ask mode (`#search/ask`), `openAsk`, `focusSearch` |
+| `views/live.js` | Live Sports grid |
+| `views/mylist.js` | My List / My Stuff |
+| `views/detail.js` | the detail sheet, seasons, episodes |
+| `views/reading*.js` | the Read tab: hub, manga/comic series pages, source adapters, title match (see "Reading") |
+| `reader/` | the page reader (`reader.js`), its pure rules (`logic.js`) and progress over `reading` (`progress.js`) |
+| `player/player.js` | `play`, `playLive`, `closePlayer`, `selectSource`, fullscreen, PiP, `handlePlayerKey`, `setCaptionsHandler` |
+| `player/session.js` | shared player state (`session.ctx/debrid/direct/resumeAt`) + `setLoading/setHint/setBadge` |
+| `player/debrid.js` | Torrentio + RD tier: stream filters, `resolveDebrid`, `debridWhy` |
+| `player/sources.js` | embed `PROVIDERS`, ad-free `resolveDirect`, source `<select>` options |
+| `player/hls.js` | `playHls` / `destroyHls` over the vendored hls.js |
+| `player/upnext.js` | Up Next banner + auto-next episode |
+| `ui/actions.js` | delegated clicks: `onAction(name, fn)` |
+| `ui/{hero,row,card,nav,pills,tabbar}.js` | markup builders for shelves, cards, hero, desktop nav, phone pills + tab bar |
+| `ui/settings.js` | Settings sheet: Debrid, Captions, Anime audio, Home server, Sync, Install, About |
+| `ui/toast.js` | `toast(text, opts)` / `closeToast(id)` |
+| `ui/install.js` | install hints (iOS Share sheet / `beforeinstallprompt`) |
+| `styles/index.css` | the cascade order: `base, layout, player, phone, overlays` — add new files at the END |
+
+Modules never touch the DOM at import time (only inside functions), which is
+what lets `test/` import the pure ones from node. Import cycles are avoided
+(e.g. `upnext.autoNext(play)` takes the player's `play` as an argument).
+
+### The store (`state.js`) — every persisted read/write goes through it
+
+```js
+import { getState, setState, subscribe } from './state.js';
+getState()                       // frozen snapshot: { list, continue, rdkey, installHint, prefs, reading, tombs, sync }
+setState({ list: newList })      // persist + notify; null/undefined deletes the key (-> default)
+setState(patch, { source: 'sync' })
+const off = subscribe((state, { keys, source }) => { ... })   // source: 'local' | 'storage' (another tab) | yours
+```
+- Keys map 1:1 to the original localStorage keys (`SCHEMA`): `list`→`sw_list`,
+  `continue`→`sw_continue`, `rdkey`→`sw_rdkey`, plus `installHint`→`sw_install_hint`.
+  Existing browsers keep their data across the upgrade.
+- `local: true` in `SCHEMA` marks device-only keys (`rdkey` — Settings promises it
+  stays "only in this browser" — `installHint`, and `sync`, the sync engine's
+  rev + queue). Everything else syncs.
+- **Sync stamps are automatic.** On every write whose source isn't `'sync'`, the
+  store gives each changed entry of `list` / `continue` / `reading` an
+  `updatedAt` (ms) and records each removed entry in `tombs`. Writers just call
+  the helpers or `setState` with the new value — never set `updatedAt`
+  yourself (a changed entry is restamped anyway), and remove an entry by
+  leaving it out (that is what syncs the removal). Identity: `list`/`continue`
+  entries by `kind:id`; `reading` entries by their key (values must be objects).
+- **Prefs** (`getPrefs()` fills defaults, `setPrefs(patch)` shallow-merges; null
+  deletes): `subLang` (auto-on caption language; absent = captions off),
+  `subLangs` (preference order, default `['en']`), `subSize` (`S|M|L`, default
+  `M`), `subOff` (titles with captions off), `animeAudio` (`sub|dub`, default
+  dub), `askHistory`, `readingOldestFirst`. Any module may add a key.
+- Snapshots are deep-frozen JSON round-trips of what's stored: build new
+  arrays/objects and `setState` them; mutating a snapshot throws.
+- Nothing else touches `localStorage`. Add a key = add it to `SCHEMA`.
+- Domain helpers (`toggleList`, `recordContinue`, `saveProgress`, `savedPos`,
+  `getRdKey`, …) are thin wrappers over the store and take an optional store
+  argument for tests (`createStore(memoryStorage())`).
+- Views read the store when they render. When sync brings in a change to My
+  List / Continue Watching, Home and My List re-render (only when no sheet or
+  player is open); other views see it on their next render, or can
+  `subscribe` and look for `source === 'sync'`.
+
+### Clicks: `data-act`, never `onclick`
+The Worker sends a nonce-based CSP, so inline handlers (`onclick="…"`) are
+blocked. Markup declares `data-act="<name>"` (plus `data-*` arguments) and the
+owning module registers `onAction('<name>', (el, event) => …)` at top level.
+`check.mjs` fails the build on any inline `on*=` handler and on any rendered
+`data-act` with no registered handler. Registered: `go`, `logout`, `detail`,
+`detail-close`, `detail-play`, `detail-list`, `season`, `episode`, `resume`,
+`surprise`, `live`, `settings`, `settings-close`, `debrid-connect`,
+`debrid-remove`, `install`, `player-close`, `player-fullscreen`, `player-pip`,
+`set-pref`, `caption-lang-up`, `caption-lang-remove`, `server-check`, `sync-now`,
+`search-mode`, `ask-open`, `ask-send`, `ask-suggest`, `ask-retry`, `ask-stop`,
+`ask-reset`, `ask-history`.
+
+### Adding a route / view
+1. Add the name to `KNOWN` in `router.js` (and to `HOME_TAB_ROUTES` /
+   `PILL_ROUTES` if it should light Home / show the pills).
+2. Write `views/<name>.js` exporting `view<Name>(arg)` that renders into `#main`.
+3. Add it to `VIEWS` in `main.js` (boot warns if `KNOWN` and `VIEWS` drift).
+4. Link to it with `data-act="go" data-to="#<name>"`.
+
+### Scripts, CSP and the build
+- `PAGE` holds two inline scripts: hls.js **1.5.17**, vendored byte-for-byte from
+  `node_modules/hls.js/dist/hls.min.js` (not re-bundled: its transmux Web Worker
+  is built by stringifying its own UMD wrapper), then the esbuild IIFE of
+  `main.js`. No external scripts — add a library by importing it from npm.
+- Each `<script>` carries a nonce placeholder; the Worker fills a fresh random
+  nonce per response and sends `script-src 'nonce-…' 'self'`,
+  `worker-src 'self' blob:`, `object-src 'none'`, `base-uri 'none'`.
+  Images, media, frames and fetches are unrestricted (TMDB, RD, extractor, embeds).
+- `check.mjs` also fails if `src/generated/` is stale, if an inline script
+  doesn't parse or is cut short (e.g. by `</script` in a string), or if a
+  manifest/link icon isn't served.
+
+### Player hooks for later features
+- `setCaptionsHandler(fn)` — `c` calls `fn({ video, ctx, hls })` (`video` is null
+  on an embed). The default toggles any text tracks the stream already exposes.
+- Keyboard (player open): space/k play-pause · ←/→ and j/l ±10 s · f fullscreen
+  · m mute · c captions · Esc close. `/` focuses search when the player is closed.
+  Shortcuts run in the capture phase and take over from a focused `<video>`'s
+  native key handling, so nothing fires twice.
+- PiP: a bar button on desktop for the `<video>` path (never for embeds); phones
+  use their browser's own PiP control.
 
 ## Notes
-- **Ads:** the embed sources carry their own ads. Use a browser ad blocker
-  (uBlock Origin) for an ad-free experience — same as any web streaming site.
-- **Privacy:** everything past `/login` requires the auth cookie; the TMDB token
-  is never exposed to the browser.
-- **No home server needed** — playback is provider-embed based, so it works from
-  any network. (This is separate from the relay/extractor the apps use.)
+- **Ads:** the embed sources carry their own ads. The debrid and ad-free tiers
+  don't load the provider page at all; for embeds use a browser ad blocker.
+- **Privacy:** everything past `/login` requires the auth cookie, except the
+  static PWA files (`/sw.js`, `/manifest.webmanifest`, `/icons/*`); the TMDB
+  token is never exposed to the browser.
+- The service worker caches only the app shell; it never caches `/api/*`,
+  `/login`, media or anything cross-origin.

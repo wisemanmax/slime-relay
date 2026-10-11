@@ -1,0 +1,94 @@
+/* ─── Mobile: mirrors the iOS app's Home ─────────────────────────────────
+   Wordmark header → filter pills → inset 16:9 hero with dots → poster
+   shelves → floating tab bar. Desktop is untouched; everything here is
+   scoped to the phone width. */
+.pills-row,#tabbar,.m-only,.hdr-icons{display:none}   /* phone-only chrome */
+
+@media(max-width:700px){
+  /* Header: wordmark + icons only. Nav becomes pills, search becomes a tab. */
+  header{gap:0;padding:14px 16px 10px;justify-content:space-between;
+    background:linear-gradient(to bottom,#000 0%,rgba(0,0,0,.72) 60%,transparent)}
+  .brand{font-size:24px;letter-spacing:1.2px;color:var(--accent)}
+  .brand span{color:var(--accent)}
+  header nav,header .search-box,header .logout.desktop{display:none}
+  .hdr-icons{display:flex;align-items:center;gap:14px}
+  .hdr-icons .ic{width:34px;height:34px;border-radius:50%;background:#1c1f1d;
+    display:grid;place-items:center;font-size:16px;cursor:pointer;color:#fff}
+  .hdr-icons .ic.me{background:rgba(53,199,89,.18);border:2px solid var(--accent)}
+
+  /* Filter pills (All · Movies · Series · Anime) */
+  .pills-row{display:flex;gap:10px;overflow-x:auto;padding:2px 16px 14px;
+    scrollbar-width:none}
+  .pills-row button{flex:0 0 auto;height:34px;padding:0 18px;border-radius:17px;
+    font-size:15px;font-weight:700;cursor:pointer;
+    background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,.5)}
+  .pills-row button.on{background:#fff;color:#000;border-color:#fff}
+
+  /* Hero: an inset 16:9 card, not a full-bleed banner */
+  .hero{height:auto;overflow:visible;padding:0 16px}
+  .hero .bg{position:absolute;inset:0;background-position:center 22%}
+  .hero::after{display:none}   /* desktop's side-scrim; the card draws its own */
+  .hero .stagewrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(0deg,rgba(0,0,0,.92) 4%,rgba(0,0,0,.35) 46%,transparent 78%)}
+  .hero .stagewrap{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden}
+  .hero .inner{position:absolute;left:0;right:0;bottom:0;padding:0 14px 12px;max-width:none}
+  .hero .eyebrow,.hero p.ov,.btn.icon,.btn.ghost{display:none}
+  .hero h1{font-size:27px;line-height:1.08;margin:0 0 6px;max-width:72%}
+  .hero .pills{gap:0;margin:0 0 2px}
+  .hero .pills .pill{border:0;background:none;padding:0;color:rgba(255,255,255,.78);
+    font-size:13px}
+  /* Padding, not a spaced string: whitespace inside the content property
+     collapses at the element boundary, which rendered "7.8 ·Series". */
+  .hero .pills .pill:not(:last-child)::after{content:"·";padding:0 7px;
+    color:rgba(255,255,255,.45)}
+  .hero .pills .pill.rate{color:rgba(255,255,255,.78)}
+  .btns{position:absolute;right:14px;bottom:14px;margin:0}
+  .btn.play{padding:9px 20px;border-radius:22px;font-size:15px}
+  .dots{position:static;display:flex;justify-content:center;gap:6px;padding:10px 0 2px}
+  .dots i{width:6px;height:6px;background:rgba(255,255,255,.28)}
+  .dots i.on{width:18px;border-radius:6px;background:var(--accent)}
+
+  /* Shelves: portrait posters, app proportions */
+  .row{margin:18px 0}
+  .row h2{font-size:17px;padding:0 16px;margin-bottom:9px}
+  .track{gap:12px;padding:0 16px 4px}
+  .card{width:112px}
+  .card img,.card .ph{width:112px;height:168px;border-radius:8px}
+  .card .t{font-size:12px;margin-top:6px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:14px;padding:14px 16px}
+
+  /* Channel tiles + genre bar at phone scale */
+  .chip{width:138px;height:76px}
+  .chip span{font-size:13.5px}
+  .chipgrid{grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:12px;padding:8px 16px 18px}
+  .chead{padding:18px 16px 16px}
+  .chead h1{font-size:23px}
+  .genrebar{padding:12px 16px 4px}
+
+  /* Room for the floating bar */
+  main{padding-bottom:104px}
+
+  /* Floating tab bar */
+  #tabbar{display:flex;position:fixed;left:10px;right:10px;bottom:8px;z-index:70;
+    padding:5px;gap:0;border-radius:26px;
+    background:rgba(28,31,29,.82);backdrop-filter:blur(18px);
+    border:1px solid rgba(255,255,255,.09);box-shadow:0 8px 26px rgba(0,0,0,.5)}
+  #tabbar button{flex:1;background:none;border:0;cursor:pointer;color:rgba(255,255,255,.62);
+    padding:8px 0 7px;border-radius:21px;display:flex;flex-direction:column;
+    align-items:center;gap:3px;font-size:9px;font-weight:800;letter-spacing:.2px}
+  #tabbar button .g{font-size:17px;line-height:1}
+  #tabbar button.on{background:var(--accent);color:#000}
+
+  /* Search gets its own screen, like the iOS tab */
+  .m-search{display:flex;gap:10px;padding:0 16px 12px}
+  .m-search input{flex:1;width:100%;background:#141814;border:1px solid var(--line);border-radius:12px;
+    color:var(--txt);font-size:16px;padding:11px 14px;outline:none}
+  .m-only{display:block}
+
+  /* Sheets go full-height like a native cover */
+  .sheet{margin:0;border-radius:0;min-height:100%;border:0}
+  .sheet .back{height:230px}
+  .sheet .body{padding:0 16px 30px;margin-top:-56px}
+  .sheet h1{font-size:25px}
+  .eps{grid-template-columns:1fr}
+}

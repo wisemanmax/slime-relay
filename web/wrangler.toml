@@ -2,12 +2,54 @@ name = "slime-web"
 main = "src/worker.js"
 compatibility_date = "2024-11-01"
 
+# Custom domain. byheir.com is a zone on this Cloudflare account, so the first
+# `wrangler deploy` with this route creates the proxied DNS record for
+# watch.byheir.com and its certificate itself — no manual DNS step. (Fails if a
+# DNS record for watch.byheir.com already exists; delete that record first.)
+routes = [
+  { pattern = "watch.byheir.com", custom_domain = true },
+]
+# Keep the original https://slime-web.<account>.workers.dev URL working too.
+# Wrangler turns workers.dev OFF by default as soon as any route is set
+# (`workers_dev ?? routes.length === 0`), so this must stay explicit.
+workers_dev = true
+
+# `wrangler dev` must NOT use its default port 8787 on the home Mac: the
+# SlimeWatch extractor listens on *:8787 there, and wrangler binding the more
+# specific 127.0.0.1:8787 silently steals the extractor's loopback traffic
+# (observed 2026-10-11: two /vt and /trick requests got the login redirect).
+[dev]
+ip = "127.0.0.1"
+port = 8797
+
 # Public (non-secret) config: the extractor's public HTTPS front for Live/Sports.
 [vars]
 EXTRACTOR_BASE = "https://slime.byheir.com"
+# Ask: the relay whose POST /assist holds the model key (used only when the
+# RELAY service binding below is absent).
+RELAY_BASE = "https://slime-relay.byheirw.workers.dev"
 
 # Secrets (set with `wrangler secret put <NAME>`), never committed:
 #   SITE_PASSWORD    the password you'll type to get in
 #   SESSION_SECRET   any long random string (openssl rand -hex 32) — signs the cookie
 #   TMDB_TOKEN       your TMDB v4 read token (Bearer) so the key stays server-side
-#   SLIME_TOKEN      the extractor token (same one the apps use) → powers Live/Sports
+#   SLIME_TOKEN      the extractor token (same one the apps use) → powers Live/Sports,
+#                    and is the relay token Ask sends to /assist
+#   RD_KEY           optional default Real-Debrid token for signed-in browsers
+
+# Personal sync (src/worker/sync.js): the owner's My List, Continue Watching,
+# prefs and reading progress, one JSON value in KV, so every browser agrees.
+# Create once:  npx wrangler kv namespace create STATE   -> paste the id below.
+# Without this binding /api/state answers 503 and each browser stays local.
+[[kv_namespaces]]
+binding = "STATE"
+id = "PASTE_STATE_KV_ID"
+
+# Ask (src/worker/ask.js) calls the relay Worker-to-Worker through this binding:
+# a plain fetch from slime-web.<account>.workers.dev to another workers.dev
+# Worker can be refused (Cloudflare error 1042). Needs slime-relay deployed on
+# the SAME Cloudflare account; if it isn't, delete this block and Ask falls
+# back to fetching RELAY_BASE.
+[[services]]
+binding = "RELAY"
+service = "slime-relay"

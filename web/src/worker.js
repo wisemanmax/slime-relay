@@ -2,13 +2,26 @@
 // Cloudflare Worker. It gates everything behind a password, proxies TMDB so the
 // API token never reaches the browser, and serves the SPA which plays titles via
 // provider-embed iframes.
-import { PAGE } from './page.js';
+//
+// The SPA lives in src/app/ as ES modules; `npm run build` bundles it into
+// src/generated/ (committed, so deploys need no build step). PAGE is the whole
+// app as one HTML string; STATIC holds the PWA files served without the gate.
+import { PAGE, NONCE_PLACEHOLDER } from './generated/page.js';
+import { STATIC } from './generated/static.js';
+import { dispatch } from './worker/modules.js';
 
 const COOKIE = 'sw_auth';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    // PWA files — deliberately UNGATED. The install sheet fetches the manifest
+    // and icons without the session cookie, and the browser re-checks /sw.js for
+    // updates on its own schedule; a 302 to /login would break both. They carry
+    // nothing private: the manifest, the icons, and the shell-cache script.
+    const asset = staticAsset(url.pathname, request.method);
+    if (asset) return asset;
 
     // ── Auth token: a hash of the two secrets. Can't be forged without them. ──
     const expected = await authToken(env);
@@ -45,6 +58,9 @@ export default {
     }
 
     // TMDB proxy — /api/tmdb/<path>?<query> → api.themoviedb.org/3/<path>
+    // Feature route modules (src/worker/modules.js) — each wave registers one.
+    { const r = await dispatch(request, env, url, ctx); if (r) return r; }
+
     if (url.pathname.startsWith('/api/tmdb/')) {
       const path = url.pathname.slice('/api/tmdb/'.length);
       const target = new URL(`https://api.themoviedb.org/3/${path}`);
@@ -130,9 +146,46 @@ export default {
     }
 
     // The app itself.
-    return html(PAGE);
+    return appPage();
   },
 };
+
+/* The app page, with a per-request CSP nonce. Both inline scripts (vendored
+   hls.js, then the app bundle) carry the nonce, so no other script can run:
+   no injected inline script, no inline on* handler, no third-party src.
+   'self' admits same-origin scripts only (e.g. Cloudflare's own /cdn-cgi/
+   helpers if a zone feature injects one); 'unsafe-inline' is IGNORED by every
+   browser that understands nonces and only keeps pre-CSP2 browsers working.
+   worker-src: hls.js runs its transmuxer in a blob: Worker, and the service
+   worker is /sw.js. Images, media, frames and fetches stay unrestricted — TMDB
+   art, RD/extractor streams and the provider embeds all come from elsewhere. */
+const PAGE_PARTS = PAGE.split(NONCE_PLACEHOLDER);
+function appPage() {
+  const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+  return new Response(PAGE_PARTS.join(nonce), {
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'content-security-policy':
+        `script-src 'nonce-${nonce}' 'self' 'unsafe-inline'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'`,
+    },
+  });
+}
+
+const decoded = new Map();   // icon bytes, decoded once per isolate
+function staticAsset(pathname, method) {
+  if ((method !== 'GET' && method !== 'HEAD') || !Object.hasOwn(STATIC, pathname)) return null;
+  const a = STATIC[pathname];
+  let body = a.text;
+  if (body == null) {
+    body = decoded.get(pathname);
+    if (!body) { body = Uint8Array.from(atob(a.base64), (c) => c.charCodeAt(0)); decoded.set(pathname, body); }
+  }
+  const headers = { 'content-type': a.type, 'cache-control': a.cache, 'x-content-type-options': 'nosniff' };
+  // /sw.js already sits at the root, so its default scope is the whole site;
+  // the header keeps that true should the script ever move.
+  if (pathname === '/sw.js') headers['service-worker-allowed'] = '/';
+  return new Response(method === 'HEAD' ? null : body, { headers });
+}
 
 async function authToken(env) {
   const data = new TextEncoder().encode(`${env.SITE_PASSWORD || ''}:${env.SESSION_SECRET || ''}`);
@@ -258,6 +311,14 @@ async function rdCheck(request) {
 function loginPage(failed) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>SlimeWatch</title>
+<meta name="theme-color" content="#0a0d0b">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SlimeWatch">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root{--bg:#0a0d0b;--accent:#37e29a;--txt:#e8f0ea;--dim:#7d8a82;--panel:#121613;--line:#1f2723}
   *{box-sizing:border-box} html,body{height:100%}
