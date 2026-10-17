@@ -3,6 +3,8 @@
 // routing policy (key "policy": { disabled:[ids], preferred:id|null,
 // devices:{ <deviceId>: { server:id|null, avoid:[ids], seenAt:ms } } }).
 // Per-device presence freshness for that map lives in seen:<deviceId> (TTL'd).
+// Watch Party rooms live in the PartyRoom Durable Object (binding PARTY, one
+// per room code — party.js); KV only keeps a party:<code> registry for listing.
 //
 // Roles (secrets, set via `wrangler secret put`):
 //   ADMIN_TOKEN  full control — dashboard, /servers (names+addresses+load),
@@ -35,12 +37,26 @@
 //                         { action:'avoid'|'unavoid', device, server } per-device avoid
 //                         { action:'clear-device', device } drop the device's policy
 //   POST /presence        viewer heartbeat (user) { id, name, title, sub, kind,
-//                         platform, paused, server } — server = fleet name played through
-//   GET  /presence        who's watching (admin) -> { active, sessions:[{..., server, routing}] }
+//                         platform, paused, server, party } — server = fleet name played
+//                         through; party = the Watch Party code it's in ("" = none)
+//   GET  /presence        who's watching (admin) -> { active, sessions:[{..., server, party, routing}] }
 //   GET  /                dashboard (admin) — status + controls
 //   POST /assist          the apps' "Ask" assistant (user|admin) — see assist.js
+//   POST /party           create a Watch Party (user) { device, name, emoji, accentHex }
+//                         -> { code, hostSecret, memberId, expiresAt, joinUrl }
+//   GET  /party/:code     peek a room (user) -> { code, item, memberCount, members,
+//                         everyoneControls, createdAt, hostName }
+//   GET  /party/:code/ws  the room's WebSocket (user; Authorization or ?key=) — party.js
+//   DELETE /party/:code   end it (user + the host's secret: body { secret } or ?secret=)
+//   GET  /party/rooms     registered rooms + their live summary (admin)
+//   GET  /p/:code         public join page (no auth) -> slimewatch://party?code=
 
 import { handleAssist } from './assist.js';
+import { handleParty } from './party.js';
+import { CODE_RE } from './party-reducer.js';
+
+// The Durable Object class must be exported from the Worker's main module.
+export { PartyRoom } from './party.js';
 
 const HEARTBEAT_TTL = 90;
 const FRESH_MS = 60_000;
@@ -218,6 +234,8 @@ export default {
         // The fleet server's name this device is playing through ("" = unknown
         // or a manual host). Display only: routing never trusts it.
         server: typeof body.server === 'string' ? body.server.slice(0, 80) : '',
+        // The Watch Party this device is in ("" = none). Display only.
+        party: typeof body.party === 'string' && body.party.length <= 8 && CODE_RE.test(body.party) ? body.party : '',
         lastSeen: Date.now(),
       };
       await env.SERVERS.put(`pres:${rec.id}`, JSON.stringify(rec), { expirationTtl: PRESENCE_TTL });
@@ -245,6 +263,7 @@ export default {
       }
       sessions.forEach((s, i) => {
         s.server = typeof s.server === 'string' ? s.server : '';   // rows from before this field
+        s.party = typeof s.party === 'string' ? s.party : '';
         s.routing = routingSummary(rules[i], (sid) => names.get(sid) || sid);
       });
       return json({ active: sessions.length, sessions });
@@ -305,6 +324,11 @@ export default {
       await foldSeen(env, policy);
       await env.SERVERS.put('policy', JSON.stringify(policy));
       return json({ ok: true, policy });
+    }
+
+    // ── Watch Party rooms (PartyRoom Durable Object) — see party.js ──
+    if (url.pathname === '/party' || url.pathname.startsWith('/party/') || url.pathname.startsWith('/p/')) {
+      return handleParty(request, env, { isUser, isAdmin, clientIP, json, rateLimited, htmlResponse });
     }
 
     // ── Dashboard (admin) ──

@@ -21,3 +21,14 @@ kv_namespaces = [
 # Turn on once the fleet is on Tailscale (or via `wrangler secret put ADDR_PRIVATE_ONLY`):
 # [vars]
 # ADDR_PRIVATE_ONLY = "1"
+
+# Watch Party rooms: one Durable Object per room code (src/party.js). The class
+# MUST be SQLite-backed (new_sqlite_classes, not new_classes): that is the only
+# Durable Object storage the Workers Free plan allows. A migration tag is
+# applied once per class change; never edit or reorder an applied one.
+[durable_objects]
+bindings = [ { name = "PARTY", class_name = "PartyRoom" } ]
+
+[[migrations]]
+tag = "v1-party"
+new_sqlite_classes = ["PartyRoom"]
