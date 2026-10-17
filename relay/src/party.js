@@ -47,7 +47,7 @@ const CLIENT_TYPES = new Set(['play', 'pause', 'seek', 'rate', 'setItem', 'queue
 // Per-socket budgets: [messages, window ms]. Best effort (kept in the attachment).
 const BUDGETS = { cmd: [30, 10_000], social: [10, 10_000], report: [1, 2_000], other: [30, 10_000], voice: [6, 20_000] };
 const BUDGET_OF = { play: 'cmd', pause: 'cmd', seek: 'cmd', rate: 'cmd', setItem: 'cmd', queue: 'cmd',
-  chat: 'social', react: 'social', report: 'report' };
+  chat: 'social', react: 'social', report: 'report', voice: 'voice' };
 
 export class PartyRoom {
   constructor(ctx, env) {
