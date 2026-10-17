@@ -37,10 +37,15 @@ const HELLO_MS = 30_000;             // a socket that never says hello is closed
 const SAVE_EVERY_MS = 30_000;        // telemetry-only changes are persisted at most this often
 const MAX_SOCKETS = 24;              // 8 members × a few reconnecting sockets
 const MAX_FRAME = 4096;
+// Push-to-talk voice clips travel as BINARY frames and are fanned out to the
+// other members, never stored: [0x56 'V'][version 1][u16 BE header length]
+// [header JSON {t:'voice', secs, mime}][audio bytes]. The room stamps the
+// header with from/name/at. A 15 s AAC clip at 24 kbps is ~45 KB.
+const VOICE_MAGIC = 0x56, VOICE_VERSION = 1, VOICE_MAX_BYTES = 300_000, VOICE_MAX_SECS = 16;
 const CLIENT_TYPES = new Set(['play', 'pause', 'seek', 'rate', 'setItem', 'queue', 'report', 'ready',
   'chat', 'react', 'typing', 'settings', 'transferHost', 'kick', 'end', 'leave']);
 // Per-socket budgets: [messages, window ms]. Best effort (kept in the attachment).
-const BUDGETS = { cmd: [30, 10_000], social: [10, 10_000], report: [1, 2_000], other: [30, 10_000] };
+const BUDGETS = { cmd: [30, 10_000], social: [10, 10_000], report: [1, 2_000], other: [30, 10_000], voice: [6, 20_000] };
 const BUDGET_OF = { play: 'cmd', pause: 'cmd', seek: 'cmd', rate: 'cmd', setItem: 'cmd', queue: 'cmd',
   chat: 'social', react: 'social', report: 'report' };
 
@@ -122,8 +127,9 @@ export class PartyRoom {
       send(ws, { t: 'closed', reason: 'ended' });
       return close(ws, 4000, 'ended');
     }
+    if (typeof raw !== 'string') return this.voice(ws, raw, now);
     let msg = null;
-    if (typeof raw === 'string' && raw.length <= MAX_FRAME) { try { msg = JSON.parse(raw); } catch {} }
+    if (raw.length <= MAX_FRAME) { try { msg = JSON.parse(raw); } catch {} }
     if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return send(ws, { t: 'error', code: 'bad_msg' });
     const att = attachment(ws);
     if (!att.hello) {
@@ -137,6 +143,28 @@ export class PartyRoom {
     if (!CLIENT_TYPES.has(msg.t)) return send(ws, { t: 'error', code: 'bad_msg', re: msg.t });
     if (!this.spend(ws, att, msg, now)) return;
     await this.apply(msg, att.memberId, ws, now);
+  }
+
+  // A binary voice clip from a joined member: validate, stamp, fan out to the
+  // others. Nothing is stored; a member who missed it missed it.
+  async voice(ws, raw, now) {
+    const att = attachment(ws);
+    if (!att.hello) return send(ws, { t: 'error', code: 'hello_required' });
+    const bytes = raw instanceof ArrayBuffer ? new Uint8Array(raw) : new Uint8Array(raw.buffer ?? raw);
+    const parsed = parseVoice(bytes);
+    if (!parsed) return send(ws, { t: 'error', code: 'bad_msg', re: 'voice' });
+    if (!this.spend(ws, att, { t: 'voice' }, now)) return;
+    const m = this.state.members[att.memberId];
+    const header = { t: 'voice', secs: parsed.header.secs, mime: parsed.header.mime,
+                     from: att.memberId, name: m?.name ?? '?', at: now };
+    const out = buildVoice(header, parsed.audio);
+    const originSid = att.sid;
+    for (const other of this.sockets()) {
+      const oa = attachment(other);
+      if (!oa.hello || oa.sid === originSid) continue;
+      try { other.send(out); } catch {}
+    }
+    this.state.lastActivity = now;
   }
 
   async hello(ws, att, msg, now) {
@@ -298,6 +326,34 @@ export class PartyRoom {
     ws.serializeAttachment(att);
     return true;
   }
+}
+
+// Voice frame codec (see VOICE_MAGIC). Returns null for anything malformed.
+export function parseVoice(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 4 || bytes.length > VOICE_MAX_BYTES) return null;
+  if (bytes[0] !== VOICE_MAGIC || bytes[1] !== VOICE_VERSION) return null;
+  const hlen = (bytes[2] << 8) | bytes[3];
+  if (hlen < 2 || 4 + hlen > bytes.length) return null;
+  let header;
+  try { header = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + hlen))); } catch { return null; }
+  if (!header || header.t !== 'voice') return null;
+  const secs = Number(header.secs);
+  if (!(secs > 0 && secs <= VOICE_MAX_SECS)) return null;
+  const mime = typeof header.mime === 'string' && header.mime.length <= 32 ? header.mime : 'audio/aac';
+  const audio = bytes.subarray(4 + hlen);
+  if (audio.length === 0) return null;
+  const stamped = {};
+  if (typeof header.from === 'string' && header.from.length <= 40) stamped.from = header.from;
+  if (typeof header.name === 'string' && header.name.length <= 24) stamped.name = header.name;
+  if (typeof header.at === 'number') stamped.at = header.at;
+  return { header: { secs: Math.round(secs * 10) / 10, mime, ...stamped }, audio };
+}
+export function buildVoice(header, audio) {
+  const h = new TextEncoder().encode(JSON.stringify(header));
+  const out = new Uint8Array(4 + h.length + audio.length);
+  out[0] = VOICE_MAGIC; out[1] = VOICE_VERSION; out[2] = (h.length >> 8) & 0xff; out[3] = h.length & 0xff;
+  out.set(h, 4); out.set(audio, 4 + h.length);
+  return out;
 }
 
 function flagsChanged(m, msg) {

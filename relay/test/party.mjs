@@ -57,7 +57,7 @@ function makeCtx() {
 function makeWS(name) {
   return {
     name, sent: [], closed: null, att: null,
-    send(s) { if (this.closed) throw new Error('send on a closed socket'); this.sent.push(JSON.parse(s)); },
+    send(s) { if (this.closed) throw new Error('send on a closed socket'); this.sent.push(typeof s === 'string' ? JSON.parse(s) : { t: 'binary', bytes: s }); },
     close(code, reason) { if (!this.closed) this.closed = { code, reason }; },
     serializeAttachment(v) { this.att = structuredClone(v); },
     deserializeAttachment() { return structuredClone(this.att); },
@@ -213,6 +213,33 @@ assert.deepEqual(wsB.drain(), [{ t: 'state', seq: room.state.seq, playback: room
 for (const t of ['sweep', 'member:hello', 'member:disconnected', 'alarm:straggler', 'hello']) {
   await room.webSocketMessage(wsB, frame(wsB, { t, id: A }));
   assert.equal(wsB.drain()[0].code, 'bad_msg', `${t} can't come from a socket`);
+}
+
+// ── Voice clips: binary in, binary out to the OTHERS, stamped with from/name ──
+{
+  const { parseVoice, buildVoice } = await import('../src/party.js');
+  const audio = new Uint8Array([1, 2, 3, 4, 5]);
+  const clip = buildVoice({ t: 'voice', secs: 2.5, mime: 'audio/aac' }, audio);
+  const before = wsB.sent.length, beforeA = wsA.sent.length;
+  await room.webSocketMessage(wsA, clip.buffer);
+  const got = wsB.sent.slice(before).filter((m) => m.t === 'binary');
+  assert.equal(got.length, 1, 'B receives one binary frame');
+  const parsed = parseVoice(new Uint8Array(got[0].bytes));
+  assert.equal(parsed.header.from, A);
+  assert.equal(parsed.header.name, 'Ann');
+  assert.equal(parsed.header.secs, 2.5);
+  assert.deepEqual(Array.from(parsed.audio), [1, 2, 3, 4, 5]);
+  assert.equal(wsA.sent.slice(beforeA).filter((m) => m.t === 'binary').length, 0, 'the sender gets no echo');
+  // malformed / too long / unknown magic → bad_msg to the sender only
+  await room.webSocketMessage(wsA, new Uint8Array([9, 9, 9, 9]).buffer);
+  assert.equal(wsA.sent.at(-1).code, 'bad_msg');
+  await room.webSocketMessage(wsA, buildVoice({ t: 'voice', secs: 99 }, audio).buffer);
+  assert.equal(wsA.sent.at(-1).code, 'bad_msg', 'over the length cap');
+  assert.equal(parseVoice(new Uint8Array(400_000)), null, 'over the byte cap');
+  // budget: 6 per 20 s, the 7th is rate_limited
+  for (let n = 0; n < 5; n++) await room.webSocketMessage(wsA, clip.buffer);
+  await room.webSocketMessage(wsA, clip.buffer);
+  assert.equal(wsA.sent.at(-1).code, 'rate_limited');
 }
 
 // A seek from A reaches B as a state with a higher seq.
