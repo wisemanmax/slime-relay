@@ -27,6 +27,16 @@
 //          asks api.aniskip.com itself (it sends ACAO *); this is its fallback.
 //   GET    /api/player/subfile?u=<https url> -> the subtitle file's bytes, for a
 //          host the browser can't fetch (CORS). Allowlisted hosts only.
+//   GET    /api/player/markers?tmdb=&kind=&s=&e=  -> TheIntroDB's intro / recap /
+//          credits / preview windows for the title (Wave 8), reduced to the fields
+//          the page reads (markers.js sanitizeIntroDB); {} when the title isn't in
+//          the database. The page asks api.theintrodb.org itself first; this is
+//          its fallback. Answers (incl. "not found") are kept 6 h in this isolate
+//          and by the browser — TheIntroDB allows 30 requests per 10 s per address,
+//          and every visitor shares the Worker's — failures are never kept.
+//          502 upstream error · 504 unreachable.
+
+import { INTRODB_BASE, sanitizeIntroDB } from '../app/player/markers.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json', 'cache-control': 'no-store' };
 const json = (obj, status = 200, cache) => new Response(JSON.stringify(obj), {
@@ -228,6 +238,36 @@ async function skip(sp) {
   }
 }
 
+/* TheIntroDB answers per title / episode, newest last (a Map keeps insertion
+   order, so the first key is the oldest). Per isolate: a cold isolate asks again. */
+export const MARKERS_TTL_MS = 6 * 3600 * 1000;
+const MARKERS_MAX = 500;
+const markerCache = new Map();
+const markerKey = (q) => q.kind === 'movie' ? 'm' + q.tmdb : `t${q.tmdb}:${q.season}:${q.episode}`;
+
+async function markers(sp) {
+  const v = titleParams(sp); if (!v.ok) return err(400, v.error);
+  const q = v.q, key = markerKey(q), now = Date.now();
+  const hit = markerCache.get(key);
+  if (hit && now - hit.at < MARKERS_TTL_MS) return json(hit.body, 200, 'private, max-age=21600');
+  const url = INTRODB_BASE + '?tmdb_id=' + q.tmdb + (q.kind === 'tv' ? `&season=${q.season}&episode=${q.episode}` : '');
+  let r, body;
+  try {
+    r = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'SlimeWatch' }, signal: AbortSignal.timeout(8000) });
+  } catch (_) {
+    return err(504, 'introdb-unreachable');
+  }
+  if (r.status === 404) body = {};   // "media not found": a real answer, kept like one
+  else if (!r.ok) return err(502, 'introdb-' + r.status);
+  else {
+    try { body = sanitizeIntroDB(await r.json()); } catch (_) { return err(502, 'introdb-bad-answer'); }
+  }
+  markerCache.delete(key);
+  markerCache.set(key, { body, at: now });
+  if (markerCache.size > MARKERS_MAX) markerCache.delete(markerCache.keys().next().value);
+  return json(body, 200, 'private, max-age=21600');
+}
+
 async function subfile(sp) {
   let u; try { u = new URL(sp.get('u') || ''); } catch (_) { return err(400, 'bad-url'); }
   if (u.protocol !== 'https:' || !SUBFILE_HOSTS.has(u.hostname) || u.username || u.password || u.port) return err(400, 'host-not-allowed');
@@ -252,6 +292,7 @@ export async function playerRoutes(request, env, url) {
 
   if (route === 'skip') return m === 'GET' ? skip(sp) : err(405, 'method');
   if (route === 'subfile') return m === 'GET' ? subfile(sp) : err(405, 'method');
+  if (route === 'markers') return m === 'GET' ? markers(sp) : err(405, 'method');   // W8 (TheIntroDB)
 
   // Everything below talks to the extractor.
   if (!['subs', 'animeids'].includes(route) && !route.startsWith('vt/')) return err(404, 'not-found');

@@ -27,6 +27,8 @@ import { seedRdKey } from './player/debrid.js';
 import { initKeys } from './keys.js';
 import { initPwa } from './pwa.js';
 import { initProfiles } from './profiles.js';
+import { initKidsGate, kidsActive } from './kids.js';   // W8: the Kids gate
+import { hiddenForKids } from './profilelock.js';
 
 /** route base -> view(arg). Keep in step with router.KNOWN ('title' is the one
     route that isn't a #main view: route() opens it over one). */
@@ -50,6 +52,9 @@ let under = '';   // the hash of the view #main shows ('' until the first render
 
 function route() {
   const r = parseRoute(location.hash);
+  // W8: a Kids profile never lands on Live sports, Reading or a Watch Party (the
+  // apps hide all three); layout.css takes their entries off the bar and nav.
+  if (hiddenForKids(r.base, kidsActive())) { location.replace('#home'); return; }
   closeDetail();
   closeReader();   // a reader route re-opens it (views/reading.js)
   // A shared '#title/…' link opens the detail sheet OVER the view on screen —
@@ -75,6 +80,7 @@ onAction('go', (el) => go(el.dataset.to));
 onAction('logout', () => { location.href = '/logout'; });
 
 initActions();
+initKidsGate();   // W8: before the first render, so a Kids profile's first rows are already thinned
 initPlayer();
 seedRdKey();   // fills a blank key from the site secret, before anything plays
 window.addEventListener('hashchange', route);

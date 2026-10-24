@@ -37,7 +37,8 @@ import { PROVIDERS, sourceOptionsHTML, resolveDirect, streamFromResolve } from '
 import { hideUpNext, autoNext } from './upnext.js';
 import { lookupAnime, animeRungs, audioPref, otherAudio, deliveredAudio, rungBudgetMs, mayTryRung, skipRung, isNoStream } from './anime.js';
 import { initSubtitles, resetSubtitles, subtitlesSource, loadIndexSubtitles, setSubtitleTimeBase, forceCaptions, closeSubtitles, watchHls, captionsKey } from './subtitles.js';
-import { initSkip, loadSkip, resetSkip, skipNow } from './skip.js';
+import { initSkip, loadSkip, loadIntroDB, resetSkip, skipNow } from './skip.js';
+import { playAllowedNow, gatePlay } from '../kids.js';   // W8: the Kids gate
 import { vtOpen, vtSeek, vtClose, vtSeekPlan, vtWindow, vtWhy } from './vt.js';
 
 let progTick = null;
@@ -49,6 +50,9 @@ const prefs = () => getPrefs();   // defaults filled in (animeAudio 'dub', …)
 
 // ── Ladder ──────────────────────────────────────────────────────────────────────
 export function play(it, kind, s, e, at) {
+  // W8: a Kids profile plays only what its cap verifiably allows — asked before
+  // anything resolves, for every caller (sheet, resume, Up Next, a party).
+  if (!playAllowedNow(it, kind)) { gatePlay(it, kind).then(ok => { if (ok) play(it, kind, s, e, at); }); return; }
   stopVideo();                         // incl. closing a running converter session
   const gen = nextGen();
   session.ctx = { it, kind, s, e }; session.resumeAt = savedPos(it.id, kind, s, e);
@@ -64,6 +68,7 @@ export function play(it, kind, s, e, at) {
   recordContinue(it, kind, s, e, session.resumeAt);
   hideUpNext();
   resetSubtitles(gen, session.ctx); resetSkip(); setAudioBadge(''); syncAudioToggle(); showVtBar(false);
+  loadIntroDB(gen, session.ctx);       // W8: TheIntroDB's intro / recap / credits, every title
   $('psel').innerHTML = '<option>Loading…</option>';
   const f0 = $('pframe'); f0.src = 'about:blank'; f0.style.display = 'none';
   setBadge(false);

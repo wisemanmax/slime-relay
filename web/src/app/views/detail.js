@@ -12,6 +12,8 @@ import { fetchAnimeIds } from '../player/playerapi.js';
 import { parseRoute, parseTitle } from '../router.js';
 import { toast } from '../ui/toast.js';
 import { isProfilesOpen } from '../profiles.js';
+import { kidsActive, titleCheck, seedCert } from '../kids.js';   // W8: the Kids gate
+import { certFromTMDB, blockedReason, NOT_AVAILABLE } from '../profilelock.js';
 
 let current = null;   // the TMDB detail object on screen (with _kind)
 let curSeason = 1;
@@ -28,9 +30,19 @@ const notice = (msg) => `<div style="position:relative"><button class="close" da
 export async function openDetail(id, kind, want = null) { const modal = $('modal'), sheet = $('sheet');
   const tok = ++loadTok;
   modal.classList.add('open'); sheet.innerHTML = notice('Loading…');
-  const d = await api(kind + '/' + id);
+  // W8: on a Kids profile the detail call brings the US rating along (one
+  // request, not two) and the sheet refuses a title above the cap — or with no
+  // rating — before anything about it shows (the apps' blocked page).
+  const kids = kidsActive();
+  const d = await api(kind + '/' + id + (kids ? '?append_to_response=' + (kind === 'movie' ? 'release_dates' : 'content_ratings') : ''));
   if (tok !== loadTok) return null;
   if (!d) { sheet.innerHTML = notice('Couldn\'t load this title.'); return null; }
+  if (kids) {
+    if (d.release_dates || d.content_ratings) seedCert(id, kind, certFromTMDB(d, kind === 'movie'));   // only a rating that actually came back
+    const c = await titleCheck(id, kind);
+    if (tok !== loadTok) return null;
+    if (c.verdict !== 'allowed') { sheet.innerHTML = blockedHTML(d, c.cert); return null; }
+  }
   d._kind = kind; current = d;
   const genres = (d.genres || []).slice(0, 3).map(g => `<span class="pill">${esc(g.name)}</span>`).join('');
   const rt = d.runtime ? `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m` : (d.episode_run_time?.[0] ? d.episode_run_time[0] + 'm' : '');
@@ -55,6 +67,13 @@ export async function openDetail(id, kind, want = null) { const modal = $('modal
   if (kind === 'tv') renderSeasons(d, want);
   showAudioSwitch(d);
   return d;
+}
+
+/** The sheet a Kids profile gets for a title above its cap (MaturityBlockedView). */
+function blockedHTML(d, cert) {
+  return `<div style="position:relative"><button class="close" data-act="detail-close" aria-label="Close">✕</button>
+    <div class="empty"><b>${esc(titleOf(d))}</b><br><br>${NOT_AVAILABLE}<br><span style="color:var(--dim)">${esc(blockedReason(cert))}</span><br><br>
+    <button class="btn ghost" data-act="profiles">Switch Profile</button></div></div>`;
 }
 
 /* '#title/<movie|tv|anime>/<id>[/<season>/<episode>][/t/<seconds>]'

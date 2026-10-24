@@ -3,6 +3,10 @@
 // server's reachability, sync status, "Install app" when the browser offers
 // it, and the build. The pref sections repaint in place, so a half-typed RD
 // token survives a tap elsewhere in the sheet.
+//
+// Wave 8 (W1): a Kids profile gets a short sheet — Profile, Captions, About —
+// an ALLOWLIST like the apps' KidsSettingsView, so a section added later stays
+// out of Kids until someone adds it there on purpose.
 
 import { esc, $ } from '../util.js';
 import { rdCheck, apiFetch } from '../api.js';
@@ -12,6 +16,7 @@ import { onAction } from './actions.js';
 import { installRowHTML } from './install.js';
 import { closeDetail } from '../views/detail.js';
 import { currentProfile, openProfiles, avatarHTML } from '../profiles.js';
+import { isKidsProfile, capOf, MATURITY_TITLE, MATURITY_DETAIL } from '../profilelock.js';
 
 export const CAPTION_LANGS = [
   ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'],
@@ -27,6 +32,7 @@ let health = null, healthAt = 0, offSync = null;
 
 export function openSettings() { const m = $('setmodal'), sh = $('setsheet');
   closeDetail(); m.classList.add('open'); const key = getRdKey();
+  if (isKidsProfile(currentProfile())) { openKidsSettings(sh); return; }
   sh.innerHTML = `<div class="set">
     <div class="set-top"><h1>Settings</h1><button class="set-btn" data-act="settings-close">Done</button></div>
 
@@ -56,6 +62,21 @@ export function openSettings() { const m = $('setmodal'), sh = $('setsheet');
   offSync = onSyncStatus(() => paintSync());
   if (!health || Date.now() - healthAt > 60000) checkServer();
 }
+/** The Kids sheet: only what a kid should reach (KidsSettingsView). */
+function openKidsSettings(sh) {
+  const cap = capOf(currentProfile());
+  sh.innerHTML = `<div class="set">
+    <div class="set-top"><h1>Settings</h1><button class="set-btn" data-act="settings-close">Done</button></div>
+    <section class="set-sec"><h2>Profile</h2><div id="set-profile">${profileHTML()}</div>
+      <p class="set-note">A Kids profile (${esc(MATURITY_TITLE[cap])}): ${esc(MATURITY_DETAIL[cap])}. Switching to another profile asks for the Parent PIN when one is set.</p></section>
+    <section class="set-sec"><h2>Captions</h2><div id="set-captions"></div></section>
+    <section class="set-sec"><h2>About</h2><div id="set-about"></div></section>
+  </div>`;
+  paintPrefs(); paintHealth();
+  if (offSync) { offSync(); offSync = null; }
+  if (!health || Date.now() - healthAt > 60000) checkServer();   // the build line in About
+}
+
 export function closeSettings() { $('setmodal').classList.remove('open'); if (offSync) { offSync(); offSync = null; } }
 export const isSettingsOpen = () => $('setmodal').classList.contains('open');
 

@@ -8,8 +8,11 @@ import { renderHero, paintHero, heroPool } from '../ui/hero.js';
 import { row, rowResume, rowChannels } from '../ui/row.js';
 import { openDetail } from './detail.js';
 import { play } from '../player/player.js';
+import { kidsActive, currentCap, visibleRecords } from '../kids.js';   // W8: the Kids gate
+import { kidsShelves, dedupeRows } from '../profilelock.js';
 
 export async function viewHome() { const main = document.getElementById('main'); main.innerHTML = '<div class="empty">Loading…</div>';
+  if (kidsActive()) return viewKidsHome(main);
   const [trend, pm, pt, anime, action] = await Promise.all([
     api('trending/all/week'), api('movie/popular'), api('tv/popular'),
     api('discover/tv?with_keywords=210024&sort_by=popularity.desc'),
@@ -32,6 +35,27 @@ export async function viewHome() { const main = document.getElementById('main');
   out += row('Popular TV', (pt?.results || []).map(x => ({ ...x, media_type: 'tv' })));
   out += row('Anime', (anime?.results || []).map(x => ({ ...x, media_type: 'tv' })));
   out += row('Action', (action?.results || []).map(x => ({ ...x, media_type: 'movie' })));
+  main.innerHTML = out; paintHero();
+}
+
+/* W8: a Kids profile's Home is its own line-up (TMDBService+Kids): films
+   ceiling-filtered by TMDB, shows checked per title by the gate api() runs,
+   a title once (its first row); Continue Watching and My List thinned to the cap. */
+async function viewKidsHome(main) {
+  const specs = kidsShelves(currentCap());
+  const [res, cont, list] = await Promise.all([
+    Promise.all(specs.map(s => api(s.path))), visibleRecords(continueList()), visibleRecords(myList()),
+  ]);
+  const rows = dedupeRows(specs.map((s, i) => ({ label: s.label, items: (res[i]?.results || []).map(x => ({ ...x, media_type: s.kind })) })));
+  if (!rows.some(r => r.items.length)) {
+    main.innerHTML = '<div class="empty">Couldn\'t load the catalog.<br><br>Check the connection and try again.</div>';
+    return;
+  }
+  let out = renderHero(rows[0].items.length ? rows[0].items : rows.find(r => r.items.length).items);
+  if (cont.length) out += rowResume(cont.map(c => ({ id: c.id, media_type: c.kind, title: c.title, poster_path: c.poster, backdrop_path: c.backdrop })), cont);
+  const mine = list.map(c => ({ id: c.id, media_type: c.kind, title: c.title, poster_path: c.poster }));
+  if (mine.length) out += row('My List', mine);
+  for (const r of rows) out += row(r.label, r.items);
   main.innerHTML = out; paintHero();
 }
 

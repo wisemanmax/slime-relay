@@ -1,6 +1,6 @@
 // Every call the SPA makes to its own Worker goes through here, so the full
 // list of endpoints it depends on is in one file:
-//   /api/tmdb/*        TMDB proxy (token stays server-side)
+//   /api/tmdb/*        TMDB proxy (token stays server-side); api() runs a Kids profile's gate over it
 //   /api/rdcheck       validate a pasted Real-Debrid token      (header x-rd-key)
 //   /api/rdkey         the owner's default RD token, if set
 //   /api/debrid        server-side Torrentio fallback            (header x-rd-key)
@@ -27,8 +27,26 @@ export async function apiFetch(path, opts) {
   return r;
 }
 
-/** TMDB via the Worker proxy. Resolves to the parsed JSON, or null on any failure. */
-export const api = async (path) => { try { const r = await apiFetch('/api/tmdb/' + path); return r.ok ? await r.json() : null; } catch { return null; } };
+/** TMDB via the Worker proxy, as it answered — no Kids gate (the gate's own
+    certification lookups come through here). Parsed JSON, or null on any failure. */
+export const tmdbRaw = async (path) => { try { const r = await apiFetch('/api/tmdb/' + path); return r.ok ? await r.json() : null; } catch { return null; } };
+
+/* Wave 8 (W1): a Kids profile's catalog gate (kids.js installs it at boot).
+   Every answer api() hands a view passes through it; it thins TMDB LIST
+   answers to the titles the profile's cap verifiably allows and returns
+   everything else untouched — one choke point, so no row, grid or search
+   result can skip it. On an Adults profile it returns the answer as it is. */
+let tmdbGate = null;
+export function setTmdbGate(fn) { tmdbGate = typeof fn === 'function' ? fn : null; }
+
+/** TMDB via the Worker proxy (through the Kids gate when one is set).
+    Resolves to the parsed JSON, or null on any failure. */
+export const api = async (path) => {
+  const j = await tmdbRaw(path);
+  if (!j || !tmdbGate) return j;
+  // A gate that fails shows nothing rather than everything (fail closed).
+  try { return await tmdbGate(path, j); } catch { return Array.isArray(j.results) ? { ...j, results: [] } : j; }
+};
 
 // The helpers below return parsed JSON and THROW on failure; callers keep their
 // own try/catch so each surface words its own error.

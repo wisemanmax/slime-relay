@@ -116,6 +116,62 @@ your `ADMIN_TOKEN` there to see and control the fleet from the app too.
 
 ---
 
+## 4. Devices (per-device tokens)
+
+The household token (`USER_TOKEN` = every server's `SLIME_TOKEN`) is compiled
+into every app, so a leak used to mean a rebuild for everyone. Each device can
+now **enrol once** and get its own token; the dashboard lists every device and
+**Revoke** shuts one out within a minute — on the relay and on every server.
+
+**Enrol a device.** Dashboard → **Devices** → *Add a device* (optionally give it
+a label, e.g. "Living room TV"). A one-time code appears large, with a QR of
+`slimewatch://enrol?code=…`. On the device: Settings → Advanced (iPhone) or
+Connection (Apple TV, Mac) → **Enrol** → type the code; the iPhone can scan the
+QR with its camera instead. Codes are 8 characters (no 0/O or 1/I, any case,
+with or without the dash), work **once**, for **15 minutes**, and at most 5 can
+be open. A wrong, used or expired code gets the same "bad code" answer. The
+admin iPhone can issue codes too (`POST /admin/devices/invite` with the admin
+token). Enrolling the same device again with a fresh code replaces its token.
+
+**The device list** shows each device's name, kind, app, when it enrolled and
+when it was last seen (by the relay or by a server). **Revoke** refuses the
+device's token at once on that dashboard's relay instance and everywhere within
+a minute (relay answers are cached ≤ 30 s; servers get the new list on their
+next 30 s heartbeat); the row stays, greyed. **Forget** removes a revoked row.
+A revoked device can come back only with a new code.
+
+**What the relay keeps:** only SHA-256 hashes of device tokens and of invite
+codes, in the `DeviceRegistry` Durable Object (one instance, strongly
+consistent — KV is not, ~60 s). A token is shown exactly once, in the enrol
+reply. Servers receive the live hashes in every `/register` reply (`tokens`),
+never a token; an old server ignores the field, an old app keeps using the
+household token.
+
+**Deploying it:** the first `wrangler deploy` after this change applies the
+Durable Object migration `v2-devices` (in `wrangler.toml`) once — nothing to
+run by hand, and nothing changes for shipped apps until they carry enrolment.
+Check: `GET /admin/devices` with the admin token → `{"devices":[],"invites":[]}`.
+
+**Locking the household token to enrolment (after the rotation):** once every
+device is enrolled and the servers' `SLIME_TOKEN` has been rotated, set
+`DEVICE_TOKENS_REQUIRED` to `1` (`printf 1 | npx wrangler secret put
+DEVICE_TOKENS_REQUIRED`). From then on `USER_TOKEN` opens **only**
+`/devices/enroll` (it stays the enrolment credential compiled into the apps);
+`/route`, `/presence`, `/assist` and `/party` want a device token or the admin
+token. Make sure `FLEET_TOKEN` is set first: without it `/register` falls back
+to the user role, which the household token no longer has (a device token is
+never accepted there). Undo: `npx wrangler secret delete DEVICE_TOKENS_REQUIRED`.
+
+| Route | Who | What |
+|---|---|---|
+| `POST /admin/devices/invite` | admin | `{label?}` → `201 {code, display, link, expiresAt}` |
+| `POST /devices/enroll` | household token or admin | `{code, deviceId, name, platform, app}` → `{deviceId, token, name, issuedAt}`; `403 bad-code`; `429` past 10/min per IP |
+| `GET /devices/me` | the device token | `{deviceId, name, platform, enrolledAt}`; `401` revoked/unknown; `503` registry unreachable |
+| `GET /admin/devices` | admin | `{devices:[…], invites:[{hint, label, expiresAt}]}` |
+| `POST /admin/devices/revoke` · `/forget` | admin | `{id}` → `{ok:true}` (forget: revoked devices only) |
+
+---
+
 ## Capacity
 
 Each server advertises `capacity` (its `SESSION_CAP`, default 80) and reports live
@@ -136,3 +192,4 @@ spreads out as you add machines. Lower a box's ceiling via `SESSION_CAP` in
 - ✅ Cloudflare relay + live dashboard with admin routing controls
 - ✅ App auto-routes across the whole fleet (reachable + least-loaded, with failover)
 - ✅ Each server also serves comics at `/comic/*` (batcave) automatically — no extra setup
+- ✅ Per-device tokens: one-time enrolment codes, a device list with last seen, revoke within a minute

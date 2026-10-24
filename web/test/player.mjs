@@ -582,6 +582,46 @@ export async function runPlayerChecks() {
       eq([session.ctx.e, session.momentAt], [2, null], 'an episode link without one plays as before');
       closeDetail(); closePlayer();
       await flush(20);
+
+      // W8 (W1): TheIntroDB markers on a title that isn't anime — the button and
+      // `s` on the real player, and the Worker fallback once the browser is refused.
+      {
+        const { refreshSkip, skipNow, initSkip } = await import('../src/app/player/skip.js');
+        const { seekTo } = await import('../src/app/player/player.js');
+        initSkip(seekTo);   // what initPlayer() does: the player's converter-aware seek
+        const base = globalThis.fetch, introAsked = [];
+        let introAnswer = () => jsonRes({ tmdb_id: 7090, type: 'tv', intro: [{ start_ms: 60000, end_ms: 150000 }], credits: [{ start_ms: 1300000, end_ms: null }] });
+        globalThis.fetch = async (u, init) => {
+          const url = String(u);
+          if (url.startsWith('https://api.theintrodb.org/') || url.startsWith('/api/player/markers')) { introAsked.push(url); return introAnswer(url); }
+          return base(u, init);
+        };
+        play({ id: 7090, name: 'A Drama', genre_ids: [18] }, 'tv', 1, 1);
+        for (let i = 0; i < 80 && session.cur !== 'vidlink'; i++) await flush(2);
+        const v = el('pvideo'); v.style.display = ''; v.duration = 1420; v.currentTime = 100; refreshSkip();
+        eq([introAsked, el('pskip').textContent, el('pskip').classList.contains('on')],
+          [['https://api.theintrodb.org/v3/media?tmdb_id=7090&season=1&episode=1'], 'Skip intro ⏭', true], 'W8: a live-action episode gets TheIntroDB\'s "Skip intro" (asked straight from the browser)');
+        ok(skipNow() && v.currentTime === 150, 'W8: s / the button jumps to the window\'s end');
+        v.currentTime = 1400; refreshSkip();
+        eq(el('pskip').textContent, 'Skip credits ⏭', 'W8: credits that run to the end of the file offer "Skip credits"');
+        ok(skipNow() && v.currentTime === 1419.5, 'W8: ...which lands just short of the end, where Up Next takes over');
+        closePlayer(); await flush(5);
+        ok(!el('pskip').classList.contains('on'), 'W8: closing the player takes the button away');
+        introAsked.length = 0;
+        introAnswer = (u) => { if (u.startsWith('https://')) throw new TypeError('Failed to fetch'); return jsonRes({ intro: [{ start_ms: 5000, end_ms: 50000 }] }); };
+        play({ id: 7091, title: 'A Film', genre_ids: [18] }, 'movie', 1, 1);
+        for (let i = 0; i < 40 && introAsked.length < 2; i++) await flush(2);
+        closePlayer(); await flush(5);
+        play({ id: 7092, title: 'Another Film', genre_ids: [18] }, 'movie', 1, 1);
+        for (let i = 0; i < 40 && introAsked.length < 3; i++) await flush(2);
+        eq(introAsked, ['https://api.theintrodb.org/v3/media?tmdb_id=7091', '/api/player/markers?tmdb=7091&kind=movie', '/api/player/markers?tmdb=7092&kind=movie'],
+          'W8: the browser refused (CORS) -> the Worker\'s copy, and no more direct tries this page');
+        play({ id: 7091, title: 'A Film', genre_ids: [18] }, 'movie', 1, 1);
+        await flush(10);
+        eq(introAsked.length, 3, 'W8: a title asked once per page (cached)');
+        closePlayer(); await flush(5);
+        globalThis.fetch = base;
+      }
     }
   } finally {
     globalThis.fetch = realFetch;

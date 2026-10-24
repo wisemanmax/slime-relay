@@ -6,6 +6,14 @@ import { esc } from '../util.js';
 import { CHANNELS, GENRES, chanName, provQ } from '../catalog.js';
 import { card } from '../ui/card.js';
 import { row, chanTile } from '../ui/row.js';
+import { kidsActive, currentCap } from '../kids.js';   // W8: the Kids gate
+import { kidsMovieParams, kidsMovieRows } from '../profilelock.js';
+
+/* W8: on a Kids profile every movie query carries the US certification ceiling,
+   so TMDB filters the films (no per-title lookups); shows still pass api()'s
+   per-title gate. {} on an Adults profile — the queries are exactly as before. */
+const kidsQ = () => (kidsActive() ? kidsMovieParams(currentCap()) : {});
+const withKids = (path) => { const q = new URLSearchParams(kidsQ()).toString(); return q ? path + '&' + q : path; };
 
 export async function viewList(kind, title, endpoints) { const main = document.getElementById('main');
   main.innerHTML = '<div class="empty">Loading…</div>';
@@ -13,7 +21,7 @@ export async function viewList(kind, title, endpoints) { const main = document.g
   let out = ''; endpoints.forEach((e, i) => { out += row(e.label, (res[i]?.results || []).map(x => ({ ...x, media_type: kind }))); });
   main.innerHTML = out || '<div class="empty">Nothing here.</div>';
 }
-export const viewMovies = () => viewList('movie', 'Movies', [
+export const viewMovies = () => viewList('movie', 'Movies', kidsActive() ? kidsMovieRows(currentCap()) : [
   { path: 'movie/popular', label: 'Popular' }, { path: 'movie/top_rated', label: 'Top Rated' },
   { path: 'movie/now_playing', label: 'Now Playing' }, { path: 'movie/upcoming', label: 'Upcoming' }]);
 export const viewTV = () => viewList('tv', 'TV', [
@@ -29,11 +37,12 @@ export const viewAnime = () => viewList('tv', 'Anime', [
 export async function viewChannel(pid) {
   const main = document.getElementById('main'); const name = chanName(pid);
   main.innerHTML = '<div class="empty">Loading ' + esc(name) + '…</div>';
+  const k = kidsQ();
   const specs = [
-    { label: 'Popular on ' + name, path: `discover/movie?${provQ(pid)}`, kind: 'movie' },
+    { label: 'Popular on ' + name, path: `discover/movie?${provQ(pid, k)}`, kind: 'movie' },
     { label: 'Series',             path: `discover/tv?${provQ(pid)}`,    kind: 'tv' },
-    { label: 'Top Rated',          path: `discover/movie?${provQ(pid, { sort_by: 'vote_average.desc', 'vote_count.gte': '200' })}`, kind: 'movie' },
-    ...GENRES.map(([g, l]) => ({ label: l, path: `discover/movie?${provQ(pid, { with_genres: g })}`, kind: 'movie' })),
+    { label: 'Top Rated',          path: `discover/movie?${provQ(pid, { sort_by: 'vote_average.desc', 'vote_count.gte': '200', ...k })}`, kind: 'movie' },
+    ...GENRES.map(([g, l]) => ({ label: l, path: `discover/movie?${provQ(pid, { with_genres: g, ...k })}`, kind: 'movie' })),
   ];
   const res = await Promise.all(specs.map(s => api(s.path)));
   let out = `<div class="chead" style="background:${(CHANNELS.find(c => c[0] === +pid) || [0, 0, '#151515'])[2]}">
@@ -59,8 +68,8 @@ export async function viewGenre(gid) {
   const chips = GENRES.map(([g, l]) =>
     `<button class="${+g === +gid ? 'on' : ''}" data-act="go" data-to="#genre/${g}">${l}</button>`).join('');
   const [pop, top] = await Promise.all([
-    api(`discover/movie?with_genres=${gid}&sort_by=popularity.desc&vote_count.gte=40`),
-    api(`discover/movie?with_genres=${gid}&sort_by=vote_average.desc&vote_count.gte=300`),
+    api(withKids(`discover/movie?with_genres=${gid}&sort_by=popularity.desc&vote_count.gte=40`)),
+    api(withKids(`discover/movie?with_genres=${gid}&sort_by=vote_average.desc&vote_count.gte=300`)),
   ]);
   const items = (pop?.results || []).map(x => ({ ...x, media_type: 'movie' }));
   main.innerHTML = `<div class="genrebar">${chips}</div>` +

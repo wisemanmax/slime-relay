@@ -215,6 +215,79 @@ there, query kept.
   Protocol: the relay's `party-reducer.js` header and the app repo's
   `docs/WATCH-PARTY.md`.
 
+## Parity (Wave 8)
+Roadmap 8.3: the web audited against the iPhone (the app repo's
+`docs/WEB-PARITY-2026-10-24.md`, one matrix per area), then the three smallest
+high-value gaps built. Staged, not deployed.
+
+**Skip markers for everything** (`player/markers.js`, `player/skip.js`). Every title
+asks TheIntroDB (theintrodb.org — community intro / recap / credits / preview windows
+keyed by TMDB id; a film without season/episode) as it starts, and the skip button and
+`s` key offer them the way they offer AniSkip's. On anime AniSkip wins per kind (its
+opening and TheIntroDB's are the same stretch; credits count as its outro). Credits with
+no end run to the end of the file: skipping lands 0.5 s short of it, so `ended` starts Up
+Next (hidden on a converter session or before the length is known). The browser asks
+api.theintrodb.org itself; when it refuses (CORS, a blocker) the page asks
+`GET /api/player/markers?tmdb=&kind=&s=&e=` (`src/worker/player.js`: the answer cleaned to
+the fields the page reads, `{}` for "not found", kept 6 h per isolate and
+`private, max-age=21600` in the browser, failures never kept; 502 / 504) and goes straight
+there for the rest of the page. One ask per title per page.
+
+**Kids profiles and the Parent PIN** (`profilelock.js` pure rules, `kids.js` the runtime
+gate, `profiles.js`, `src/worker/profiles.js`). The apps'
+`MaturityPolicy` / `ParentPIN` / `ProfileLockRules`:
+- A profile record may carry `kids: true` + `maturity` (`littleKids` | `olderKids` |
+  `teens`, Older Kids by default) and `locked: true`; old records read as ordinary.
+  The picker's ⋯ (or a long-press) opens **Edit**: Kids + level, Lock with Parent PIN,
+  Delete. The grid's **Parent PIN** sets, changes or removes the household PIN.
+- On a Kids profile `api()` runs every TMDB **list** answer through one gate
+  (`setTmdbGate`): only titles whose US certification is at or under the cap stay
+  (unrated ones go — fail closed); people go. A `discover/movie` carrying TMDB's own
+  `certification.lte` ceiling is trusted as it is; anything else is checked per title
+  (`movie/<id>/release_dates`, `tv/<id>/content_ratings` through `tmdbRaw`, at most six
+  at once, cached in the store's device-only `certs` key — `sw_certs` — 90 days when
+  rated, 7 when not; a failed lookup isn't kept). Home is the Kids line-up; the Movies
+  pill, channels and genres put the ceiling on their movie queries; My List and Continue
+  Watching are thinned; the title sheet asks the rating with the detail
+  (`append_to_response`) and shows "Not available on this profile" + the reason; `play()`
+  refuses first, for every caller. `#live`, `#read`, `#party` redirect Home and leave the
+  bar / nav (`body.kids`, `layout.css`); Search has no Ask; Settings is Profile, Captions,
+  About (an allowlist).
+- The PIN's digits never leave the browser: it sends `pinProof` = PBKDF2-SHA256(pin,
+  salt, 100,000 — the Workers' ceiling), hex. KV `household-pin` = `{v, salt, verifier:
+  SHA-256(proof), iterations, updatedAt}`. Asked (`pinProof` in the body or an
+  `x-sw-pin` header) by `/select` for a locked target or when the cookie's Kids profile
+  leaves, and by every change once a PIN exists. Failures in KV `pin-fails`: three free,
+  then 30 s doubling to 15 min (per household).
+
+  | Call | Answer |
+  |---|---|
+  | `GET /api/profiles` | + `pin: {set:true, salt, iterations[, retryAfter]}` once one is set (never the verifier) |
+  | `POST /api/profiles` `{name, kids?, maturity?}` | as before; 403 `pin-required` once a PIN exists without the proof |
+  | `PATCH /api/profiles/<id>` `{kids?, maturity?, locked?}` | `{profile, profiles}` · 400 `bad-flags` · 409 `no-pin` (a lock needs a PIN) |
+  | `POST /api/profiles/select` `{id, pinProof?}` | as before · 403 `pin-required` / `pin-wrong {failures, retryAfter}` · 429 `pin-locked {retryAfter}` |
+  | `DELETE /api/profiles/<id>?confirm=` | as before; the proof in `x-sw-pin` once a PIN exists |
+  | `POST /api/profiles/pin` `{salt, newProof, iterations, pinProof?}` | `{pin}` (set, or change with the current proof) · 400 `bad-pin` |
+  | `DELETE /api/profiles/pin` | `{profiles}` — the PIN and every lock removed |
+  | `POST /api/profiles/pin/check` | `{ok:true}` — the picker's prompt before a change · 409 `no-pin` |
+
+- The site password stays the real gate (clearing cookies signs the browser out too); the
+  catalog filter runs in the browser, as in the apps; each load refreshes the remembered
+  profile's Kids flags from the server's list.
+
+**My Stuff parity** (`views/mylist.js`, `views/search.js`). My List opens with Continue
+Watching, then the list with **✦ Pick one for me** (two or more titles, not on Kids): Ask
+with the apps' seed question in its own conversation that sees My List only (first 15, no
+history — `AssistantSeed.pickFromList`); "New chat" leaves it, a profile switch clears it.
+
+New actions: `mylist-pick`, `profile-pin`, `profile-pin-ok`, `profile-pin-save`,
+`profile-pin-remove`, `profile-save`, `profile-ask-delete`, `profile-flag` (`profile-menu`
+now opens Edit). Tests: `test/parity.mjs` (markers + the fallback route, the Kids rules,
+the certification store, the gate on the real store, PIN proofs vs `node:crypto`, the
+lockout, `/api/profiles` with flags and the PIN over a fake KV, the controller, the
+picker's panels, Pick one for me); `test/player.mjs` (TheIntroDB on the real player);
+`test/unit.mjs` (the `certs` key).
+
 ## Reading
 The **Read** tab (fifth on the phone bar; `#read` on desktop): manga and comics,
 with Continue Reading + Saved on top, a Manga | Comics switch, search, shelves,
@@ -313,6 +386,8 @@ web/
                            import both ways and per-profile queues (real engine -> real Worker via a cookie jar)
   test/party.mjs           Watch Party: rules, the room client (fake socket + clock), the binder (fake <video>),
                            /api/party + /p/ redirect, the page over a mini DOM, the relay's real reducer
+  test/parity.mjs          Wave 8 parity: TheIntroDB markers + /api/player/markers, Kids rules + the catalog gate,
+                           the Parent PIN (proofs, lockout, /api/profiles), Pick one for me
   test/reading.mjs         Read tab: Mangapill parsers + MangaDex mapping on saved answers (test/fixtures/),
                            /api/read + /api/comic routes (scripted upstream), reader rules, progress, tab width
   src/worker/              feature route modules behind the gate (modules.js registers them):

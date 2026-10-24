@@ -17,6 +17,29 @@
 //   Without the STATE KV binding every route answers 503 { error:'profiles-not-configured' }
 //   (the browser then stays local, as sync does).
 //
+// Wave 8 (W1) — Kids profiles and the household Parent PIN (the apps' rules,
+// src/app/profilelock.js). A record may carry `kids: true` (+ `maturity`:
+// littleKids | olderKids | teens) and `locked: true`; old records without them
+// read as an ordinary, unlocked profile. The PIN is ONE KV value (`household-pin`:
+// {v, salt, verifier, iterations, updatedAt}) where verifier = SHA-256 of the
+// proof — PBKDF2(pin, salt, 100,000), derived in the browser, so neither the
+// digits nor anything a request could replay is ever stored. The proof comes as
+// `pinProof` in a JSON body or an `x-sw-pin` header, and is asked:
+//   - by /select when the target is locked, or the cookie's profile is Kids and
+//     the target is another profile (the kid-proof exit) — so a direct API call
+//     can't skip it;
+//   - by every change (create, PATCH, delete, the PIN itself) once a PIN exists.
+// Wrong proofs count in `pin-fails` ({n, until}): none for three, then 30 s
+// doubling to 15 min (429 pin-locked { retryAfter }); a right one resets it.
+// The answer never carries the verifier. The site password stays the real gate:
+// clearing cookies also signs the browser out.
+//   GET    /api/profiles                 -> also `pin: { set:true, salt, iterations[, retryAfter] }` once one is set
+//   PATCH  /api/profiles/<id> { kids?, maturity?, locked? }  -> { profile, profiles } · 409 no-pin (locking needs a PIN)
+//   POST   /api/profiles/pin { salt, newProof, iterations }  -> { pin }   set, or change (with the current proof)
+//   DELETE /api/profiles/pin             -> { profiles } (removes the PIN and every lock)
+//   POST   /api/profiles/pin/check       -> { ok:true } (the picker's "Enter the Parent PIN" before managing)
+//   PIN errors: 403 pin-required · 403 pin-wrong { failures, retryAfter } · 429 pin-locked { retryAfter } · 409 no-pin
+//
 // Migration: profiles shipped on top of ONE shared state (`owner-state:v1`)
 // that everybody's browsers had merged into. The first time the profile list
 // is read and has never been written, a non-empty legacy state becomes a
@@ -28,6 +51,9 @@
 // different places creating names in the same minute can lose one of them;
 // a name just made elsewhere can take a minute to appear.
 import { emptyData, mergeData } from '../app/sync.js';
+import {
+  KIDS_LEVELS, PIN_ITERATIONS, SALT_RE, PROOF_RE, pinVerifier, sameSecret, afterFailure, lockedFor, needsPIN,
+} from '../app/profilelock.js';
 
 export const PROFILES_PATH = '/api/profiles';
 export const PROFILES_KEY = 'profiles';
@@ -39,6 +65,8 @@ export const SHARED_ID = 'shared';
 /** The iOS profile accents (ProfilePickerView.accents); new names take the first one not in use. */
 export const PROFILE_COLORS = ['#35C759', '#E50914', '#0A46E6', '#9C27B0', '#FF9800', '#00BCD4', '#E91E63', '#FFC107', '#4CAF50', '#607D8B'];
 export const SHARED_COLOR = '#8E8E93';
+export const PIN_KEY = 'household-pin';
+export const PIN_FAILS_KEY = 'pin-fails';
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const stateKey = (id) => 'state:' + id;
@@ -128,6 +156,101 @@ async function readBody(request) {
   try { const v = JSON.parse(text); return v && typeof v === 'object' ? v : null; } catch { return null; }
 }
 
+// ── Kids flags + the Parent PIN (Wave 8) ─────────────────────────────────────
+
+/** The stored PIN record, or null (none set, or unreadable — never a half-trusted one). */
+export async function readPin(env) {
+  let v = null;
+  try { v = await env.STATE.get(PIN_KEY, 'json'); } catch {}
+  return v && SALT_RE.test(v.salt) && /^[0-9a-f]{64}$/.test(v.verifier) && v.iterations === PIN_ITERATIONS ? v : null;
+}
+async function readFails(env) {
+  let v = null;
+  try { v = await env.STATE.get(PIN_FAILS_KEY, 'json'); } catch {}
+  return v && Number.isFinite(v.n) ? v : null;
+}
+/** What the page may know about the PIN: that it exists, and how to derive a proof. */
+const publicPin = (pin, fails, now) => {
+  const out = { set: true, salt: pin.salt, iterations: pin.iterations };
+  const wait = lockedFor(fails, now);
+  return wait ? { ...out, retryAfter: wait } : out;
+};
+/** The proof a request carries (x-sw-pin header, else body.pinProof), lower-cased. */
+function proofOf(request, body) {
+  const v = request.headers.get('x-sw-pin') ?? (body && body.pinProof);
+  return typeof v === 'string' ? v.trim().toLowerCase() : '';
+}
+/** Check a proof against the PIN, counting failures. -> null when it passes, else the refusal. */
+async function refusePin(env, pin, proof) {
+  const now = Date.now();
+  const fails = await readFails(env);
+  const wait = lockedFor(fails, now);
+  if (wait) return json({ error: 'pin-locked', retryAfter: wait }, 429);
+  if (!proof) return json({ error: 'pin-required' }, 403);
+  if (PROOF_RE.test(proof) && sameSecret(await pinVerifier(proof), pin.verifier)) {
+    if (fails) await env.STATE.delete(PIN_FAILS_KEY);
+    return null;
+  }
+  const next = afterFailure(fails, now);
+  await env.STATE.put(PIN_FAILS_KEY, JSON.stringify(next));
+  return json({ error: 'pin-wrong', failures: next.n, retryAfter: lockedFor(next, now) }, 403);
+}
+/** Changes ask the PIN once one exists. -> null to go ahead, else the refusal. */
+async function manageGate(env, request, body) {
+  const pin = await readPin(env);
+  return pin ? refusePin(env, pin, proofOf(request, body)) : null;
+}
+/** Apply {kids?, maturity?, locked?} to a record. -> the record, or an error code. */
+function withFlags(p, body, hasPIN) {
+  const out = { ...p };
+  if (body.kids !== undefined) {
+    if (typeof body.kids !== 'boolean') return 'bad-flags';
+    if (body.kids) out.kids = true; else delete out.kids;
+  }
+  if (body.maturity !== undefined) {
+    if (!KIDS_LEVELS.includes(body.maturity)) return 'bad-flags';
+    out.maturity = body.maturity;
+  }
+  if (body.locked !== undefined) {
+    if (typeof body.locked !== 'boolean') return 'bad-flags';
+    if (body.locked && !hasPIN) return 'no-pin';
+    if (body.locked) out.locked = true; else delete out.locked;
+  }
+  return out;
+}
+
+async function pinRoutes(request, env, path) {
+  const method = request.method;
+  const pin = await readPin(env);
+  if (path === PROFILES_PATH + '/pin/check') {
+    if (method !== 'POST') return json({ error: 'method-not-allowed' }, 405);
+    if (!pin) return json({ error: 'no-pin' }, 409);
+    return (await refusePin(env, pin, proofOf(request, await readBody(request)))) || json({ ok: true });
+  }
+  if (method === 'POST') {
+    const body = await readBody(request);
+    if (pin) { const no = await refusePin(env, pin, proofOf(request, body)); if (no) return no; }
+    const salt = body && typeof body.salt === 'string' ? body.salt.toLowerCase() : '';
+    const proof = body && typeof body.newProof === 'string' ? body.newProof.toLowerCase() : '';
+    if (!SALT_RE.test(salt) || !PROOF_RE.test(proof) || !body || body.iterations !== PIN_ITERATIONS) return json({ error: 'bad-pin' }, 400);
+    const rec = { v: 1, salt, verifier: await pinVerifier(proof), iterations: PIN_ITERATIONS, updatedAt: Date.now() };
+    await env.STATE.put(PIN_KEY, JSON.stringify(rec));
+    await env.STATE.delete(PIN_FAILS_KEY);
+    return json({ pin: publicPin(rec, null, Date.now()) });
+  }
+  if (method === 'DELETE') {
+    if (!pin) return json({ error: 'no-pin' }, 409);
+    const no = await refusePin(env, pin, proofOf(request, null)); if (no) return no;
+    await env.STATE.delete(PIN_KEY);
+    await env.STATE.delete(PIN_FAILS_KEY);
+    // Removing the PIN clears every lock (a lock nobody can open is no lock).
+    const profiles = (await loadProfiles(env)).map(p => { const { locked, ...rest } = p; return rest; });
+    await saveProfiles(env, profiles);
+    return json({ profiles });
+  }
+  return json({ error: 'method-not-allowed' }, 405);
+}
+
 export async function profilesRoutes(request, env, url) {
   const path = url.pathname;
   if (path !== PROFILES_PATH && !path.startsWith(PROFILES_PATH + '/')) return null;
@@ -138,7 +261,10 @@ export async function profilesRoutes(request, env, url) {
     if (method === 'GET') {
       const profiles = await loadProfiles(env);
       const c = profileCookie(request);
-      return json({ profiles, current: c && profiles.some(p => p.id === c) ? c : null });
+      const pin = await readPin(env);
+      const out = { profiles, current: c && profiles.some(p => p.id === c) ? c : null };
+      if (pin) out.pin = publicPin(pin, await readFails(env), Date.now());
+      return json(out);
     }
     if (method !== 'POST') return json({ error: 'method-not-allowed' }, 405);
     const body = await readBody(request);
@@ -148,9 +274,15 @@ export async function profilesRoutes(request, env, url) {
     const dupe = profiles.find(p => sameName(p.name, name));
     if (dupe) return json({ error: 'name-taken', profile: dupe }, 409);
     if (profiles.length >= MAX_PROFILES) return json({ error: 'too-many', max: MAX_PROFILES }, 409);
+    const refused = await manageGate(env, request, body); if (refused) return refused;
     const used = new Set(profiles.map(p => String(p.color).toUpperCase()));
     const color = PROFILE_COLORS.find(c => !used.has(c)) || PROFILE_COLORS[profiles.length % PROFILE_COLORS.length];
-    const profile = { id: newId(name, new Set(profiles.map(p => p.id))), name, color, createdAt: Date.now(), lastUsedAt: 0 };
+    let profile = { id: newId(name, new Set(profiles.map(p => p.id))), name, color, createdAt: Date.now(), lastUsedAt: 0 };
+    if (body.kids !== undefined || body.maturity !== undefined) {   // a Kids profile from the start (never locked here)
+      const flagged = withFlags(profile, { kids: body.kids, maturity: body.maturity }, false);
+      if (typeof flagged === 'string') return json({ error: flagged }, 400);
+      profile = flagged;
+    }
     const next = [...profiles, profile];
     await saveProfiles(env, next);
     return json({ profile, profiles: next }, 201);
@@ -163,18 +295,42 @@ export async function profilesRoutes(request, env, url) {
     const profiles = await loadProfiles(env);
     const i = ID_RE.test(id) ? profiles.findIndex(p => p.id === id) : -1;
     if (i < 0) return json({ error: 'no-such-profile' }, 404);
+    // W8: a locked profile, or leaving the cookie's Kids profile, needs the PIN —
+    // here, so a direct API call can't skip the picker's prompt.
+    const pin = await readPin(env);
+    const cur = profiles.find(p => p.id === profileCookie(request)) || null;
+    if (needsPIN({ current: cur && { id: cur.id, kids: cur.kids === true }, target: { id, locked: profiles[i].locked === true }, hasPIN: !!pin })) {
+      const no = await refusePin(env, pin, proofOf(request, body)); if (no) return no;
+    }
     const profile = { ...profiles[i], lastUsedAt: Date.now() };
     await saveProfiles(env, profiles.map((p, j) => (j === i ? profile : p)));
     return json({ profile }, 200, { 'set-cookie': cookieHeader(id) });
   }
 
+  if (path === PROFILES_PATH + '/pin' || path === PROFILES_PATH + '/pin/check') return pinRoutes(request, env, path);
+
   let id = '';
   try { id = decodeURIComponent(path.slice(PROFILES_PATH.length + 1)); } catch {}
+  if (method === 'PATCH') {
+    const body = await readBody(request);
+    if (!body) return json({ error: 'bad-flags' }, 400);
+    const profiles = await loadProfiles(env);
+    const i = ID_RE.test(id) ? profiles.findIndex(p => p.id === id) : -1;
+    if (i < 0) return json({ error: 'no-such-profile' }, 404);
+    const pin = await readPin(env);
+    const profile = withFlags(profiles[i], body, !!pin);
+    if (typeof profile === 'string') return json({ error: profile }, profile === 'no-pin' ? 409 : 400);
+    if (pin) { const no = await refusePin(env, pin, proofOf(request, body)); if (no) return no; }
+    const next = profiles.map((p, j) => (j === i ? profile : p));
+    await saveProfiles(env, next);
+    return json({ profile, profiles: next });
+  }
   if (method !== 'DELETE') return json({ error: 'method-not-allowed' }, 405);
   const profiles = await loadProfiles(env);
   const profile = ID_RE.test(id) ? profiles.find(p => p.id === id) : null;
   if (!profile) return json({ error: 'no-such-profile' }, 404);
   if (!sameName(url.searchParams.get('confirm') || '', profile.name)) return json({ error: 'confirm-mismatch' }, 400);
+  const refused = await manageGate(env, request, null); if (refused) return refused;
   const next = profiles.filter(p => p.id !== id);
   await saveProfiles(env, next);
   await env.STATE.delete(stateKey(id));
