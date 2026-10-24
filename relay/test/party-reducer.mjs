@@ -31,7 +31,8 @@ assert.equal(s.v, 1);
 assert.equal(s.code, 'ABC234');
 assert.equal(s.seq, 0);
 assert.equal(s.hostId, 'm_host');
-assert.deepEqual(s.settings, { everyoneControls: true, waitForStragglers: false, stragglerTimeoutMs: 20000 });
+// Wave 7 adds control: 'shared' — the same default as everyoneControls: true.
+assert.deepEqual(s.settings, { control: 'shared', everyoneControls: true, waitForStragglers: false, stragglerTimeoutMs: 20000 });
 assert.deepEqual(s.playback, { playing: false, mediaTime: 0, serverTimeAtUpdate: T0, rate: 1, seq: 0, by: null,
   cmd: null, reason: 'item', waitingFor: [] });
 assert.equal(s.item, null);
@@ -40,7 +41,7 @@ assert.equal(s.members.m_host.role, 'host');
 assert.equal(s.members.m_host.connected, false, 'the host row connects with its hello');
 assert.equal(s.members.m_host.secret, 'host-secret');
 assert.deepEqual(peekView(s), { code: 'ABC234', item: null, memberCount: 0, members: [], everyoneControls: true,
-  createdAt: T0, hostName: 'Hana' });
+  createdAt: T0, hostName: 'Hana', control: 'shared', hostPlatform: '', companions: 0 });   // last 3: Wave 7
 
 // ── hello: the host resumes its row with the secret ──
 let r = hello(s, 'm_host', T0 + 100, { secret: 'host-secret', name: 'Hana' });

@@ -181,6 +181,40 @@ model.
   length promises checked against TMDB runtimes, 7 rounds / 12 lookups,
   conversation trimmed under the relay's caps).
 
+## Watch Party
+Join an app's Watch Party room from the browser (roadmap Wave 7). A signed-in
+visitor opening `watch.byheir.com/p/<CODE>` lands on `#party/<CODE>`: the room's
+title, host, members (their room photos, else colour + emoji or initial) and
+control mode, then **Join**. Signed out, `/p/<CODE>` goes to the relay's public
+page as before (its "Watch in the browser" link comes back through the login);
+`?companion=1` (the Apple TV's QR, for the app's chat-only seat) always goes
+there, query kept.
+
+- The browser is always an **ordinary member**: platform `web`, never host
+  (the relay never hands it the room), never a companion. It follows the
+  room's item and clock, sends play / pause / seek only when allowed (the host,
+  or anyone in a `control: "shared"` room — refused locally first with "Only
+  the host can control playback", then snapped back), chats, reacts and shows
+  avatars. Voice clips appear as a chat line and are never played; the web
+  never records or sends one, nor `settings` / `transferHost` / `kick` / `end` /
+  `role` / `avatar`.
+- Sync on the `<video>` (debrid, ad-free HLS, the /vt converter) uses the apps'
+  AVPlayer rules: drift < 0.3 s nothing, < 2 s a ±5 % `playbackRate` nudge, else
+  a seek with a 0.15 s lead; the converter seeks through `seekTo` and settles
+  8 s. The embed iframe can't be driven: it reports `engine: "embed"` and shows
+  "Not synced". A joiner starts at the room's clock, never its own resume point.
+- The token never reaches the page: `/api/party/<CODE>[?avatars=1]` (peek) and
+  `/api/party/<CODE>/ws` (the socket, upgrade forwarded) are proxied by
+  `src/worker/party.js` with `SLIME_TOKEN`, through the `RELAY` binding (else
+  `RELAY_BASE`), behind the password cookie; a cross-site upgrade is refused.
+- Code: `party/rules.js` (pure: control rule, clock, drift, item mapping),
+  `party/client.js` (the socket, DOM-free), `party/bind.js` (player glue; the
+  player's two hooks are `session.party.seekIntent` and `.holdsEnd`),
+  `views/party.js` (join page, lobby, the panel beside the player),
+  `styles/party.css`; tests in `test/party.mjs` (incl. the relay's real reducer).
+  Protocol: the relay's `party-reducer.js` header and the app repo's
+  `docs/WATCH-PARTY.md`.
+
 ## Reading
 The **Read** tab (fifth on the phone bar; `#read` on desktop): manga and comics,
 with Continue Reading + Saved on top, a Manga | Comics switch, search, shelves,
@@ -277,12 +311,15 @@ web/
   test/profiles.mjs        /api/profiles CRUD + validation + cap + dedupe + delete-confirm + legacy migration,
                            /api/state per profile (428, header/cookie guard), the switch flow, the first-pick
                            import both ways and per-profile queues (real engine -> real Worker via a cookie jar)
+  test/party.mjs           Watch Party: rules, the room client (fake socket + clock), the binder (fake <video>),
+                           /api/party + /p/ redirect, the page over a mini DOM, the relay's real reducer
   test/reading.mjs         Read tab: Mangapill parsers + MangaDex mapping on saved answers (test/fixtures/),
                            /api/read + /api/comic routes (scripted upstream), reader rules, progress, tab width
   src/worker/              feature route modules behind the gate (modules.js registers them):
     sync.js                  /api/state, /api/state/health          ask.js   /api/ask -> relay /assist
     profiles.js              /api/profiles (names, select cookie, delete, legacy -> "Shared" migration)
     reading.js               /api/read/*, /api/comic/* (engine + comics proxy, Mangapill, MangaDex passthrough)
+    party.js                 /api/party/<CODE> (peek), /api/party/<CODE>/ws (socket) -> the relay
   scripts/icons.mjs        regenerates src/app/icons/*.png (stdlib PNG encoder; `npm run icons`)
 ```
 

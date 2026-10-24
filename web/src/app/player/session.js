@@ -18,6 +18,10 @@
 //                     baseOffset }), else null
 //   session.steps     the automatic ladder for ctx (player.js) and session.step, the
 //                     rung it is on
+//   session.party     Wave 7: a Watch Party binder's hooks (party/bind.js) while this
+//                     browser is in a room, else null — { seekIntent(t) -> false =
+//                     refused (the room is host-only), holdsEnd() -> true = the room
+//                     decides what plays next, so no Up Next autoplay }
 
 import { $ } from '../util.js';
 
@@ -32,6 +36,7 @@ const titleGen = createGen();
 export const session = {
   ctx: null, debrid: [], direct: [], resumeAt: 0, momentAt: null,
   gen: 0, anime: null, vt: null, steps: [], step: 0,
+  party: null,   // W7 (party/bind.js)
 };
 /** Start a new title generation (play / playLive / close). */
 export function nextGen() { session.gen = titleGen.next(); return session.gen; }

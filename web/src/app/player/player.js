@@ -19,7 +19,8 @@
      playLive(id, name)       start a Live TV channel
      closePlayer()            stop + remember position
      selectSource(val)        'rd:<i>' | 'dx:<i>' | a PROVIDERS id
-     seekTo(t)                absolute seek (converter-aware)
+     seekTo(t)                absolute seek (converter-aware); in a Watch Party the
+                              binder sees it first (session.party.seekIntent)
      handlePlayerKey(e)       keyboard shortcuts (wired by keys.js); true = handled
      setCaptionsHandler(fn)   the 'c' key hook — fn({ video, ctx, hls })
      initPlayer()             one-time event wiring (main.js) */
@@ -358,6 +359,9 @@ let seekSeq = 0, seekTimer = null, pendingSeek = null;
     answer never replaces a newer one. */
 export function seekTo(t) {
   if (!videoVisible()) return;
+  // A party in host-only mode refuses a member's seek before anything moves
+  // (a converter seek would otherwise restart generation on the Mac first).
+  if (session.party && session.party.seekIntent(t) === false) return;
   const v = $('pvideo');
   if (!session.vt) {
     const sk = v.seekable;
@@ -648,7 +652,8 @@ export function initPlayer() {
       if (progTick) return;
       progTick = setTimeout(() => { progTick = null; saveProgress(session.ctx, mediaTime(v), mediaDuration(v)); }, 5000);
     });
-    v.addEventListener('ended', () => autoNext(play));
+    // In a Watch Party the room picks what's next (party/bind.js holdsEnd).
+    v.addEventListener('ended', () => { if (!(session.party && session.party.holdsEnd())) autoNext(play); });
     // PiP can also be entered/left from the browser's own controls.
     v.addEventListener('enterpictureinpicture', syncPipButton);
     v.addEventListener('leavepictureinpicture', syncPipButton);

@@ -134,7 +134,7 @@ assert.equal((await req('/party', { method: 'POST', body: {}, ip: '10.200.0.1' }
 r = await req(`/party/${CODE}`);
 assert.equal(r.status, 200);
 assert.deepEqual(await r.json(), { code: CODE, item: null, memberCount: 0, members: [], everyoneControls: true,
-  createdAt: ctx.data.get('state').createdAt, hostName: 'Ann' });
+  createdAt: ctx.data.get('state').createdAt, hostName: 'Ann', control: 'shared', hostPlatform: '', companions: 0 });   // last 3: Wave 7
 assert.equal((await req(`/party/${CODE.toLowerCase()}`)).status, 200, 'codes are case-insensitive');
 assert.equal((await req('/party/no!pe')).status, 400);
 assert.equal((await req('/party/ABCDEO')).status, 400, 'O is not in the alphabet');

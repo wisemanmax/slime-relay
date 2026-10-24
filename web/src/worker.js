@@ -32,12 +32,26 @@ export default {
     }
 
     // A party invite on this host. With SlimeWatch installed the phone opens
-    // the app and this never runs; without it, the relay's public join page
-    // (code, host, "open the app") — the same page the apps' invite text links.
+    // the app and this never runs. Without it (Wave 7): a signed-in visitor
+    // joins in the browser ('#party/<CODE>', views/party.js); everyone else
+    // gets the relay's public join page (code, host, "open the app", and a
+    // "Watch in the browser" link that goes through the login and back here
+    // via the `next` hash) — the same page the apps' invite text links. The
+    // Apple TV's QR adds ?companion=1 for the app's chat-only seat: that link
+    // ALWAYS goes to the relay's app-first page, query kept, even when signed
+    // in (it is also where a build without universal links lands).
     const invite = url.pathname.match(/^\/p\/([A-Za-z0-9]{6})\/?$/);
-    if (invite && env.RELAY_BASE && PARTY_CODE_RE.test(invite[1].toUpperCase())) {
-      const target = env.RELAY_BASE.replace(/\/+$/, '') + '/p/' + invite[1].toUpperCase();
-      return new Response(null, { status: 302, headers: { location: target, 'cache-control': 'no-store' } });
+    if (invite && PARTY_CODE_RE.test(invite[1].toUpperCase())) {
+      const code = invite[1].toUpperCase();
+      const companion = url.searchParams.get('companion') === '1';
+      const noStore = { 'cache-control': 'no-store' };   // the answer depends on the cookie
+      if (!companion && authed(request, await authToken(env))) {
+        return new Response(null, { status: 302, headers: { location: '/#party/' + code, ...noStore } });
+      }
+      if (env.RELAY_BASE) {
+        const target = env.RELAY_BASE.replace(/\/+$/, '') + '/p/' + code + url.search;
+        return new Response(null, { status: 302, headers: { location: target, ...noStore } });
+      }
     }
 
     // ── Auth token: a hash of the two secrets. Can't be forged without them. ──

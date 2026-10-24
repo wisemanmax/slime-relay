@@ -22,6 +22,12 @@ kv_namespaces = [
 # [vars]
 # ADDR_PRIVATE_ONLY = "1"
 
+# The web app's origin: the public /p/<code> join page adds a "Watch in the
+# browser" link to <WEB_BASE>/#party/<code> (party.js). Unset → no link. (When
+# ADDR_PRIVATE_ONLY above is turned on as a var, it goes in this same table.)
+[vars]
+WEB_BASE = "https://watch.byheir.com"
+
 # Watch Party rooms: one Durable Object per room code (src/party.js). The class
 # MUST be SQLite-backed (new_sqlite_classes, not new_classes): that is the only
 # Durable Object storage the Workers Free plan allows. A migration tag is

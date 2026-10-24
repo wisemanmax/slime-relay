@@ -15,11 +15,17 @@
 // Free plan allows.
 //
 // Socket protocol (GET /party/:code/ws): the first frame must be
-//   hello {v:1, device, name, emoji, accentHex, engine, memberId?, secret?}
-// (memberId + secret resume a row — the host's come from POST /party) and is
-// answered with welcome {you:{id, role, secret}, room}. Then: ping {c} → pong
-// {c, s:serverMs} · sync → state · and the room messages in party-reducer.js.
+//   hello {v:1, device, name, emoji, accentHex, engine, memberId?, secret?, platform?, companion?}
+// (memberId + secret resume a row — the host's come from POST /party;
+// companion:true makes a NEW seat chat-only) and is answered with welcome
+// {you:{id, role, secret}, room}, then one {t:'avatar', id, rev, jpeg} per
+// member avatar the room holds. Then: ping {c} → pong {c, s:serverMs} · sync →
+// state · and the room messages in party-reducer.js.
 // Close codes: 4000 ended/expired · 4001 full · 4002 bad hello · 4003 kicked.
+//
+// Storage: `state` (the reducer's room) and one `avatar:<memberId>` per member
+// avatar (party-avatar.js) — kept out of `state` so the room object written on
+// every seq change stays small; deleted with the member, and with the room.
 //
 // Also here: handleParty, the Worker-side /party and /p routes, dispatched
 // from worker.js with its helpers injected (like assist.js).
@@ -27,6 +33,7 @@
 import {
   CODE_RE, MEMBER_ID_RE, fresh, genCode, peekView, reduce, safeEqual, stragglerDeadline,
 } from './party-reducer.js';
+import { AVATAR_FRAME_MAX, avatarKey } from './party-avatar.js';
 
 const DAY_MS = 86_400_000;
 const IDLE_MS = 2 * 3_600_000;       // no sockets + no activity this long → room deleted
@@ -36,18 +43,20 @@ const CLOSE_ALARM_MS = 35_000;       // after a disconnect: HOST_GRACE_MS (30 s)
 const HELLO_MS = 30_000;             // a socket that never says hello is closed by the alarm
 const SAVE_EVERY_MS = 30_000;        // telemetry-only changes are persisted at most this often
 const MAX_SOCKETS = 24;              // 8 members × a few reconnecting sockets
-const MAX_FRAME = 4096;
+const MAX_FRAME = 4096;               // every text frame but {t:'avatar'} (AVATAR_FRAME_MAX)
 // Push-to-talk voice clips travel as BINARY frames and are fanned out to the
 // other members, never stored: [0x56 'V'][version 1][u16 BE header length]
 // [header JSON {t:'voice', secs, mime}][audio bytes]. The room stamps the
 // header with from/name/at. A 15 s AAC clip at 24 kbps is ~45 KB.
 const VOICE_MAGIC = 0x56, VOICE_VERSION = 1, VOICE_MAX_BYTES = 300_000, VOICE_MAX_SECS = 16;
 const CLIENT_TYPES = new Set(['play', 'pause', 'seek', 'rate', 'setItem', 'queue', 'report', 'ready',
-  'chat', 'react', 'typing', 'settings', 'transferHost', 'kick', 'end', 'leave']);
+  'chat', 'react', 'typing', 'settings', 'transferHost', 'kick', 'end', 'leave', 'role', 'avatar']);
 // Per-socket budgets: [messages, window ms]. Best effort (kept in the attachment).
-const BUDGETS = { cmd: [30, 10_000], social: [10, 10_000], report: [1, 2_000], other: [30, 10_000], voice: [6, 20_000] };
+// An avatar is sent once per join; 2 a minute leaves room for one retake.
+const BUDGETS = { cmd: [30, 10_000], social: [10, 10_000], report: [1, 2_000], other: [30, 10_000], voice: [6, 20_000],
+  avatar: [2, 60_000] };
 const BUDGET_OF = { play: 'cmd', pause: 'cmd', seek: 'cmd', rate: 'cmd', setItem: 'cmd', queue: 'cmd',
-  chat: 'social', react: 'social', report: 'report', voice: 'voice' };
+  chat: 'social', react: 'social', report: 'report', voice: 'voice', avatar: 'avatar' };
 
 export class PartyRoom {
   constructor(ctx, env) {
@@ -65,10 +74,16 @@ export class PartyRoom {
   async fetch(req) {
     await this.ready;
     const now = Date.now();
-    const path = new URL(req.url).pathname;
+    const url = new URL(req.url);
+    const path = url.pathname;
     if ((req.headers.get('upgrade') || '').toLowerCase() === 'websocket') return this.upgrade(now);
     if (path === '/init' && req.method === 'POST') return this.init(req, now);
-    if (path === '/peek') return this.live(now) ? reply(peekView(this.state)) : reply({ error: 'not found' }, 404);
+    if (path === '/peek') {
+      if (!this.live(now)) return reply({ error: 'not found' }, 404);
+      // ?avatars=1 only from GET /party/:code (the user token): never the /p/ page.
+      const avatars = url.searchParams.get('avatars') === '1' ? await this.peekAvatars() : null;
+      return reply(peekView(this.state, avatars));
+    }
     if (path === '/info') {
       if (!this.live(now)) return reply({ error: 'not found' }, 404);
       const s = this.state;
@@ -86,8 +101,10 @@ export class PartyRoom {
     const src = body.host && typeof body.host === 'object' ? body.host : {};
     const id = typeof src.id === 'string' && MEMBER_ID_RE.test(src.id) ? src.id : newMemberId();
     const secret = randomHex(16);
-    // Sockets left from a dead room under this code must not hear the new one.
+    // Sockets left from a dead room under this code must not hear the new one,
+    // and its avatars must not outlive it.
     for (const ws of this.sockets()) close(ws, 4000, 'expired');
+    if (this.state) await this.ctx.storage.deleteAll();
     this.state = fresh({ code: body.code, now, host: { ...src, id, secret } });
     await this.save(true);
     await this.ctx.storage.setAlarm(now + FIRST_ALARM_MS);
@@ -129,7 +146,8 @@ export class PartyRoom {
     }
     if (typeof raw !== 'string') return this.voice(ws, raw, now);
     let msg = null;
-    if (raw.length <= MAX_FRAME) { try { msg = JSON.parse(raw); } catch {} }
+    if (raw.length <= AVATAR_FRAME_MAX) { try { msg = JSON.parse(raw); } catch {} }
+    if (msg && raw.length > MAX_FRAME && msg.t !== 'avatar') msg = null;   // only an avatar may be that long
     if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return send(ws, { t: 'error', code: 'bad_msg' });
     const att = attachment(ws);
     if (!att.hello) {
@@ -172,7 +190,8 @@ export class PartyRoom {
       typeof msg.secret === 'string' && msg.secret.length > 0;
     const id = resume ? msg.memberId : newMemberId();
     const member = { id, device: msg.device, name: msg.name, emoji: msg.emoji, accentHex: msg.accentHex,
-                     engine: msg.engine, ...(resume ? { secret: msg.secret } : {}) };
+                     engine: msg.engine, platform: msg.platform, companion: msg.companion,
+                     ...(resume ? { secret: msg.secret } : {}) };
     const { state, effects } = reduce(this.state, { t: 'member:hello', member, newSecret: randomHex(16) }, { now, from: id });
     if (effects.some((e) => e.msg?.t === 'welcome')) {
       att.memberId = id;
@@ -282,6 +301,18 @@ export class PartyRoom {
     if (cur == null || t < cur) await this.ctx.storage.setAlarm(t);
   }
 
+  // {memberId: base64} for the connected members with an avatar (the peek's
+  // ?avatars=1). At most 8 single-key reads.
+  async peekAvatars() {
+    const out = {};
+    for (const m of Object.values(this.state.members)) {
+      if (!m.connected || !(m.avatarRev > 0)) continue;
+      const jpeg = await this.ctx.storage.get(avatarKey(m.id));
+      if (typeof jpeg === 'string') out[m.id] = jpeg;
+    }
+    return out;
+  }
+
   // Carry out reducer effects. `helloId`: effects addressed to that id go to
   // `origin` alone (see hello()).
   async dispatch(effects, origin, helloId = null) {
@@ -298,7 +329,17 @@ export class PartyRoom {
     for (const e of effects) {
       if (e.alarm != null) await this.wakeBy(e.alarm);
       else if (e.close != null) for (const ws of pick(e.close)) close(ws, e.code ?? 1000, e.reason ?? '');
-      else if (e.msg) {
+      else if (e.avatarPut != null) await this.ctx.storage.put(avatarKey(e.avatarPut), e.jpeg);
+      else if (e.avatarDrop != null) await this.ctx.storage.delete(avatarKey(e.avatarDrop));
+      else if (e.avatarsTo != null) {
+        const to = pick(e.avatarsTo);
+        for (const { id, rev } of e.avatars) {
+          const jpeg = await this.ctx.storage.get(avatarKey(id));
+          if (typeof jpeg !== 'string') continue;   // never stored (or lost): the member resends on its next join
+          const data = JSON.stringify({ t: 'avatar', id, rev, jpeg });
+          for (const ws of to) send(ws, data);
+        }
+      } else if (e.msg) {
         const data = JSON.stringify(e.msg);
         for (const ws of pick(e.to)) send(ws, data);
       }
@@ -406,7 +447,10 @@ export async function handleParty(request, env, { isUser, isAdmin, clientIP, jso
     if (method !== 'GET') return json({ error: 'method not allowed' }, 405);
     if (await rateLimited(env, `party-page:${clientIP}`, 60)) return json({ error: 'rate limited' }, 429);
     const code = page[1].toUpperCase();
-    if (!CODE_RE.test(code)) return htmlResponse(joinPage(null, null, false), 404);
+    // ?companion=1: the link a phone gets to sit beside the TV in chat-only mode
+    // (the web forwards it here); the app button keeps it.
+    const opts = { companion: url.searchParams.get('companion') === '1', webBase: env.WEB_BASE };
+    if (!CODE_RE.test(code)) return htmlResponse(joinPage(null, null, false, opts), 404);
     let peek = null, gone = false;
     if (env.PARTY) {
       try {
@@ -414,7 +458,7 @@ export async function handleParty(request, env, { isUser, isAdmin, clientIP, jso
         if (r.ok) peek = await r.json(); else gone = r.status === 404;
       } catch {}
     }
-    return htmlResponse(joinPage(code, peek, gone));
+    return htmlResponse(joinPage(code, peek, gone, opts));
   }
 
   if (!env.PARTY) return json({ error: 'party not configured' }, 503);
@@ -476,7 +520,9 @@ export async function handleParty(request, env, { isUser, isAdmin, clientIP, jso
   if (method !== 'GET' && method !== 'DELETE') return json({ error: 'method not allowed' }, 405);
   if (await rateLimited(env, `party-peek:${clientIP}`, 60)) return json({ error: 'rate limited' }, 429);
   if (!CODE_RE.test(code)) return json({ error: 'bad code' }, 400);
-  if (method === 'GET') return stubFor(env, code).fetch('https://party/peek');
+  if (method === 'GET') {
+    return stubFor(env, code).fetch(url.searchParams.get('avatars') === '1' ? 'https://party/peek?avatars=1' : 'https://party/peek');
+  }
 
   let secret = url.searchParams.get('secret') || '';
   if (!secret) { try { secret = String((await request.json())?.secret ?? ''); } catch {} }
@@ -493,7 +539,10 @@ function esc(x) {
 
 // The link a host shares. Opens the app on the code; everything shown from the
 // room (host name, title) is escaped — both come from the public app token.
-function joinPage(code, peek, gone) {
+// Never a member photo (the peek it reads has none). With WEB_BASE set, a
+// second link opens the room in the web app (which asks for its own sign-in).
+function joinPage(code, peek, gone, { companion = false, webBase = '' } = {}) {
+  const web = typeof webBase === 'string' && /^https?:\/\//.test(webBase) ? webBase.replace(/\/+$/, '') : '';
   const it = peek?.item;
   const what = it?.title
     ? esc(it.title) + (Number.isInteger(it.season) && Number.isInteger(it.episode) ? ` · S${it.season} E${it.episode}` : '')
@@ -518,13 +567,15 @@ function joinPage(code, peek, gone) {
   .code{font:800 clamp(40px,14vw,64px)/1 ui-monospace,Menlo,monospace;letter-spacing:.16em;padding:22px 8px 22px calc(8px + .16em);
     background:var(--panel);border:1px solid var(--line);border-radius:18px;margin:0 0 22px;color:var(--accent)}
   .btn{display:block;background:var(--accent);color:#04170e;font-weight:800;text-decoration:none;border-radius:14px;padding:16px;font-size:17px}
+  .btn2{display:block;margin-top:12px;color:var(--accent);font-weight:700;text-decoration:none;border:1px solid var(--line);border-radius:14px;padding:14px;font-size:16px}
   .note{color:var(--dim);font-size:13px;margin-top:22px}
 </style></head><body><main>
 <div class="brand">SLIME<span>WATCH</span></div>
 <h1>Join the Watch Party in SlimeWatch</h1>
 ${line ? `<p class="line">${line}</p>` : ''}
 ${code ? `<div class="code" aria-label="Party code">${code}</div>
-<a class="btn" href="slimewatch://party?code=${code}">Open in SlimeWatch</a>` : ''}
+<a class="btn" href="slimewatch://party?code=${code}${companion ? '&amp;companion=1' : ''}">Open in SlimeWatch</a>
+${web ? `<a class="btn2" href="${esc(web)}/#party/${code}">Watch in the browser</a>` : ''}` : ''}
 <p class="note">Don't have SlimeWatch yet? Ask the host for a TestFlight invite.</p>
 </main></body></html>`;
 }
