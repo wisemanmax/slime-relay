@@ -20,6 +20,7 @@ import { viewMyList } from './views/mylist.js';
 import { viewSearchScreen, initHeaderSearch } from './views/search.js';
 import { closeDetail, viewTitle } from './views/detail.js';
 import { viewRead } from './views/reading.js';
+import { viewParty } from './views/party.js';   // W7 (Watch Party join)
 import { closeReader, initReaderKeys } from './reader/reader.js';
 import { initPlayer } from './player/player.js';
 import { seedRdKey } from './player/debrid.js';
@@ -41,6 +42,7 @@ const VIEWS = {
   channel: viewChannel,
   genre: viewGenre,
   read: viewRead,
+  party: viewParty,   // W7: '#party/<CODE>' (renders Home until P5 lands)
 };
 for (const k of KNOWN) if (!VIEWS[k] && k !== 'title') console.warn('route "' + k + '" has no view in main.js');
 

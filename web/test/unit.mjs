@@ -103,7 +103,7 @@ export async function runUnitChecks() {
     eq(parseRoute('#constructor').active, 'home', 'prototype names are not routes');
     eq(['movies', 'tv', 'anime', 'channels', 'channel', 'genre', 'live', 'list', 'search', 'home'].map(tabFor),
        ['home', 'home', 'home', 'home', 'home', 'home', 'live', 'list', 'search', 'home'], 'tab bar mapping');
-    eq(KNOWN.length, 12, 'route list (+ read, title)');
+    eq(KNOWN.length, 13, 'route list (+ read, title, party)');
 
     // Shared title links: the shapes the app's AASA claims and AppRoute.webRoute reads.
     eq(parseTitle('#title/movie/550'), { kind: 'movie', anime: false, id: 550 }, 'a film');

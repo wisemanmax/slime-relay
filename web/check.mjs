@@ -24,6 +24,7 @@ import { runReadingChecks } from './test/reading.mjs';
 import { runSyncChecks } from './test/sync.mjs';
 import { runAskChecks } from './test/ask.mjs';
 import { runProfilesChecks } from './test/profiles.mjs';
+import { runPartyChecks } from './test/party.mjs';
 
 let bad = 0;
 const fail = (m) => { console.error('FAIL:', m); bad = 1; };
@@ -149,7 +150,7 @@ const call = (path, init) => worker.fetch(new Request('https://watch.example' + 
 }
 
 // ── 7. Unit checks: store/router/debrid, service worker, page-side update flow ──
-for (const [name, run] of [['unit', () => runUnitChecks()], ['sw', () => runSwChecks(sw ? sw.text : '')], ['pwa', () => runPwaChecks()], ['player', () => runPlayerChecks()], ['reading', () => runReadingChecks()], ['sync', () => runSyncChecks()], ['ask', () => runAskChecks()], ['profiles', () => runProfilesChecks()]]) {
+for (const [name, run] of [['unit', () => runUnitChecks()], ['sw', () => runSwChecks(sw ? sw.text : '')], ['pwa', () => runPwaChecks()], ['player', () => runPlayerChecks()], ['reading', () => runReadingChecks()], ['sync', () => runSyncChecks()], ['ask', () => runAskChecks()], ['profiles', () => runProfilesChecks()], ['party', () => runPartyChecks()]]) {
   try { const n = await run(); console.log(`${name} — ${n} checks passed`); }
   catch (e) { fail(`${name} check: ` + (e && e.message)); if (e && e.stack) console.error(e.stack.split('\n').slice(1, 4).join('\n')); }
 }

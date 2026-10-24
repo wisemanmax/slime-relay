@@ -3,7 +3,7 @@
 // dispatch table lives in main.js — a new route needs an entry in KNOWN here
 // AND in VIEWS there (main.js warns at boot if they drift).
 
-export const KNOWN = ['home', 'movies', 'tv', 'live', 'anime', 'list', 'search', 'channels', 'channel', 'genre', 'read', 'title'];
+export const KNOWN = ['home', 'movies', 'tv', 'live', 'anime', 'list', 'search', 'channels', 'channel', 'genre', 'read', 'title', 'party'];
 
 /* Movies/Series/Anime are pill routes, and the channel/genre surfaces are
    reached FROM Home, so all of them keep Home lit in the tab bar rather than

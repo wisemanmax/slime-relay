@@ -8,6 +8,7 @@ import { syncRoutes } from './sync.js';         // W3
 import { askRoutes } from './ask.js';           // W3
 import { profilesRoutes } from './profiles.js'; // profiles
 import { playerRoutes } from './player.js';     // W2
+import { partyRoutes } from './party.js';       // W7
 
 export const ROUTE_MODULES = [
   { prefix: '/api/player/', handle: playerRoutes },     // W2
@@ -15,6 +16,7 @@ export const ROUTE_MODULES = [
   { prefix: '/api/ask',     handle: askRoutes },      // W3
   { prefix: '/api/profiles', handle: profilesRoutes },  // profiles (/api/profiles, /select, /<id>)
   { prefix: '/api/read/', handle: readingRoutes }, { prefix: '/api/comic/', handle: readingRoutes },  // W4
+  { prefix: '/api/party/', handle: partyRoutes },     // W7 (/api/party/<code>, /<code>/ws)
 ];
 
 export async function dispatch(request, env, url, ctx) {
