@@ -33,8 +33,18 @@ WEB_BASE = "https://watch.byheir.com"
 # Durable Object storage the Workers Free plan allows. A migration tag is
 # applied once per class change; never edit or reorder an applied one.
 [durable_objects]
-bindings = [ { name = "PARTY", class_name = "PartyRoom" } ]
+bindings = [
+  { name = "PARTY", class_name = "PartyRoom" },
+  # Wave 8 (F1a): the device registry — ONE object, strongly consistent, so a
+  # revoked device token is refused within a minute (KV is eventually consistent).
+  { name = "DEVICES", class_name = "DeviceRegistry" },
+]
 
 [[migrations]]
 tag = "v1-party"
 new_sqlite_classes = ["PartyRoom"]
+
+# Wave 8 (F1a). Applied once, by the owner's deploy (runbook.md); never edit or reorder.
+[[migrations]]
+tag = "v2-devices"
+new_sqlite_classes = ["DeviceRegistry"]

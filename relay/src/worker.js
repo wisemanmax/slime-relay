@@ -50,13 +50,18 @@
 //   DELETE /party/:code   end it (user + the host's secret: body { secret } or ?secret=)
 //   GET  /party/rooms     registered rooms + their live summary (admin)
 //   GET  /p/:code         public join page (no auth) -> slimewatch://party?code=
+//   /devices/*, /admin/devices*  per-device tokens: enrol, list, revoke (Wave 8) — devices.js
+//   /admin/config*        remote config: publish, canary, promote, roll back (Wave 8) — remoteconfig.js
 
 import { handleAssist } from './assist.js';
 import { handleParty } from './party.js';
 import { CODE_RE } from './party-reducer.js';
+import { userAuth, deviceFleetBlock, handleDevices, devicesPanelHTML, devicesPanelScript } from './devices.js';   // Wave 8 F1a
+import { handleRemoteConfig, configFleetBlock, configPanelHTML, configPanelScript } from './remoteconfig.js';   // Wave 8 F6a
 
-// The Durable Object class must be exported from the Worker's main module.
+// The Durable Object classes must be exported from the Worker's main module.
 export { PartyRoom } from './party.js';
+export { DeviceRegistry } from './devices.js';   // Wave 8 F1a: the device-token registry
 
 const HEARTBEAT_TTL = 90;
 const FRESH_MS = 60_000;
@@ -123,7 +128,9 @@ export default {
       (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '') ||
       url.searchParams.get('key') || '';
     const isAdmin = !!env.ADMIN_TOKEN && provided === env.ADMIN_TOKEN;
-    const isUser = isAdmin || (!!env.USER_TOKEN && provided === env.USER_TOKEN);
+    // Wave 8 (F1a): userAuth (devices.js) is the USER_TOKEN check plus per-device
+    // tokens; with DEVICE_TOKENS_REQUIRED set, the shared token only enrols.
+    const isUser = isAdmin || await userAuth(env, provided, url.pathname);
     // Server-only credential for /register — NEVER the app-extractable USER_TOKEN.
     // If FLEET_TOKEN isn't set yet, /register falls back to admin-only (still safe).
     const isFleet = isAdmin || (!!env.FLEET_TOKEN && provided === env.FLEET_TOKEN);
@@ -212,7 +219,9 @@ export default {
       };
       if (!record.address) return json({ error: 'address rejected' }, 400);
       await env.SERVERS.put(`srv:${record.id}`, JSON.stringify(record), { expirationTtl: HEARTBEAT_TTL });
-      return json({ ok: true });
+      // Wave 8: the reply carries the live device-token hashes (F1a) and the remote
+      // config (F6a) to every extractor; old extractors read only `ok`.
+      return json({ ok: true, ...(await deviceFleetBlock(env, body)), ...(await configFleetBlock(env)) });
     }
 
     // ── Presence: a viewer's app reports what it's playing (any valid client
@@ -324,6 +333,15 @@ export default {
       await foldSeen(env, policy);
       await env.SERVERS.put('policy', JSON.stringify(policy));
       return json({ ok: true, policy });
+    }
+
+    // ── Wave 8 (F1a): device enrolment, the device list, revoke — devices.js ──
+    if (url.pathname.startsWith('/devices/') || url.pathname.startsWith('/admin/devices')) {
+      return handleDevices(request, env, { isUser, isAdmin, provided, clientIP, json, rateLimited });
+    }
+    // ── Wave 8 (F6a): remote config — publish, canary, promote, roll back — remoteconfig.js ──
+    if (url.pathname.startsWith('/admin/config')) {
+      return handleRemoteConfig(request, env, { isAdmin, clientIP, json, rateLimited });
     }
 
     // ── Watch Party rooms (PartyRoom Durable Object) — see party.js ──
@@ -678,7 +696,7 @@ function dashboardPage(key) {
     <div id="watchers" class="grid"><div class="empty small">Loading…</div></div>
     <h2 class="sec">Servers</h2>
     <p class="note">Routing changes apply on each device's next play (route cache ≤ 60 s).</p>
-    <div id="grid" class="grid"><div class="empty small">Loading…</div></div><script>${script}</script>`);
+    <div id="grid" class="grid"><div class="empty small">Loading…</div></div>${devicesPanelHTML()}${configPanelHTML()}<script>${script}${devicesPanelScript()}${configPanelScript()}</script>`);
 }
 
 function page(inner) {
