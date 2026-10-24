@@ -15,9 +15,12 @@ import { esc } from '../util.js';
    same reason). Offering a source that can only fail is worse than offering one
    fewer — it costs the viewer a rung and reads as "the site is broken".
 
-   Each entry: [select value, label, (tmdbId, kind, season, episode) => embed URL]. */
+   Each entry: [select value, label, (tmdbId, kind, season, episode, startAt) => embed URL].
+   startAt (s) is a shared moment's start; only VidLink takes one (`startAt=`, as
+   the apps pass it in StreamProvider.swift) — the rest start at the top. The
+   ad-free tier's resolve never passes it, so its URLs (and cache keys) stay put. */
 export const PROVIDERS = [
-  ['vidlink','VidLink',(t,k,s,e)=> k==='movie'?`https://vidlink.pro/movie/${t}?autoplay=true&title=false&primaryColor=43e048`:`https://vidlink.pro/tv/${t}/${s}/${e}?autoplay=true&title=false&primaryColor=43e048`],
+  ['vidlink','VidLink',(t,k,s,e,at)=> (k==='movie'?`https://vidlink.pro/movie/${t}?autoplay=true&title=false&primaryColor=43e048`:`https://vidlink.pro/tv/${t}/${s}/${e}?autoplay=true&title=false&primaryColor=43e048`) + (at > 0 ? `&startAt=${Math.floor(at)}` : '')],
   ['vidfast','VidFast',(t,k,s,e)=> k==='movie'?`https://vidfast.vc/movie/${t}?autoPlay=true`:`https://vidfast.vc/tv/${t}/${s}/${e}?autoPlay=true`],
   // The VidSrc mirror family shares one embed API: /embed/{movie,tv}?tmdb=&season=&episode=
   ['vidsrcme','VidSrc',(t,k,s,e)=> k==='movie'?`https://vidsrcme.ru/embed/movie?tmdb=${t}&autoplay=1`:`https://vidsrcme.ru/embed/tv?tmdb=${t}&season=${s}&episode=${e}&autoplay=1`],

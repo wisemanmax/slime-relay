@@ -114,9 +114,31 @@ export async function runUnitChecks() {
     eq(parseTitle('#title/tv/1399/0/4'), { kind: 'tv', anime: false, id: 1399, s: 0, e: 4 }, 'season 0 is specials');
     eq(parseTitle(routeHash('title', 'tv', 1399, 2, 3)), parseTitle('#title/tv/1399/2/3'), 'routeHash builds what parseTitle reads');
     eq(parseTitle('#title/tv/%31%33%39%39'), { kind: 'tv', anime: false, id: 1399 }, 'segments are URI-decoded, like the app');
+
+    // Shared moments (roadmap 4.7, '/t/<seconds>'): the grammar AppRoute.webRoute /
+    // startOffset(in:) read and ShareLinkBuilder.momentLink builds.
+    eq(parseTitle('#title/tv/1399/2/3/t/90'), { kind: 'tv', anime: false, id: 1399, s: 2, e: 3, t: 90 }, 'an episode moment');
+    eq(parseTitle('#title/anime/30984/1/12/t/754'), { kind: 'tv', anime: true, id: 30984, s: 1, e: 12, t: 754 }, 'an anime episode moment');
+    eq(parseTitle('#title/movie/550/t/3600'), { kind: 'movie', anime: false, id: 550, t: 3600 }, 'a film moment');
+    eq([parseTitle('#title/movie/550/t/0'), parseTitle('#title/tv/1399/0/4/t/0')],
+       [{ kind: 'movie', anime: false, id: 550, t: 0 }, { kind: 'tv', anime: false, id: 1399, s: 0, e: 4, t: 0 }], 't/0 is the start, and legal (a special too)');
+    eq([parseTitle('#title/movie/550/t/999999999').t, parseTitle('#title/movie/550/t/0090').t], [999999999, 90], '9 digits; leading zeros are still digits (the app\'s IntentTitleID.number)');
+    eq(parseTitle('#title/tv/1399/2/3/t/%39%30'), parseTitle('#title/tv/1399/2/3/t/90'), 'URI-encoded digits decode');
+    eq(parseTitle(routeHash('title', 'tv', 1399, 2, 3, 't', 90)), { kind: 'tv', anime: false, id: 1399, s: 2, e: 3, t: 90 }, 'routeHash builds what parseTitle reads (episode moment)');
+    eq(parseTitle(routeHash('title', 'movie', 550, 't', 0)), { kind: 'movie', anime: false, id: 550, t: 0 }, 'routeHash builds what parseTitle reads (film moment)');
+    ok(!('t' in parseTitle('#title/tv/1399/2/3')) && !('t' in parseTitle('#title/movie/550')) && !('t' in parseTitle('#title/tv/1399')), 'no moment, no t key: a plain film link still only opens the sheet');
+
     for (const bad of ['#title', '#title/tv', '#title/tv/', '#title/show/1399', '#title/other/1', '#title/tv/abc', '#title/tv/0',
       '#title/tv/-5', '#title/tv/+5', '#title/tv/1e3', '#title/tv/1234567890', '#title/tv/1399/', '#title/tv/1399/2',
-      '#title/tv/1399/2/0', '#title/tv/1399/x/3', '#title/movie/550/1/1', '#title/tv/1399/2/3/4', '#title/tv/1399?x=1', '#titles/tv/1', '#list', '']) {
+      '#title/tv/1399/2/0', '#title/tv/1399/x/3', '#title/movie/550/1/1', '#title/tv/1399/2/3/4', '#title/tv/1399?x=1', '#titles/tv/1', '#list', '',
+      // moments: a show with no episode, a bad or missing number, another segment than 't', anything trailing
+      '#title/tv/1399/t/90', '#title/anime/30984/t/90', '#title/tv/1399/t/0',
+      '#title/movie/550/t', '#title/movie/550/t/', '#title/tv/1399/2/3/t', '#title/tv/1399/2/3/t/',
+      '#title/tv/1399/2/3/t/abc', '#title/tv/1399/2/3/t/1234567890', '#title/tv/1399/2/3/t/-5', '#title/tv/1399/2/3/t/+5',
+      '#title/tv/1399/2/3/t/1.5', '#title/tv/1399/2/3/t/1e3', '#title/tv/1399/2/3/t/%2090', '#title/movie/550/t/90?x=1',
+      '#title/tv/1399/2/3/T/90', '#title/tv/1399/2/3/x/90', '#title/tv/1399/2/3/tt/90', '#title/movie/550/s/90', '#title/movie/550/time/90',
+      '#title/tv/1399/2/3/t/90/x', '#title/tv/1399/2/3/t/90/', '#title/movie/550/t/90/x', '#title/movie/550/t/90/',
+      '#title/movie/550/1/1/t/90', '#title/tv/1399/2/3/4/t/90', '#title/tv/1399/2/0/t/90', '#title/tv/1399/x/3/t/90', '#title/movie/0/t/90']) {
       eq(parseTitle(bad), null, 'not a title link: ' + JSON.stringify(bad));
     }
     eq([parseRoute('#title/tv/1399').base, parseRoute('#title/bogus').base, parseRoute('#list').active], ['title', 'title', 'list'], 'title is a route; #list is My List');
@@ -124,10 +146,16 @@ export async function runUnitChecks() {
 
   // ── Login landing: the `next` hash allow-list (src/worker/next.js) ──────────────
   {
-    const good = ['#title/tv/1399/2/3', '#title/movie/550', '#title/anime/30984', '#list', '#read/manga', '#search/ask', '#a_b-c', '#' + 'a'.repeat(80)];
-    eq(good.map(safeNext), good, 'plain hash routes (up to 80 characters after #) pass');
+    // The longest moment the app can build: anime, 9-digit id, season, episode and seconds (53 after the #).
+    const longest = '#title/anime/123456789/123456789/123456789/t/999999999';
+    const good = ['#title/tv/1399/2/3', '#title/movie/550', '#title/anime/30984', '#list', '#read/manga', '#search/ask', '#a_b-c', '#' + 'a'.repeat(80),
+      '#title/tv/1399/2/3/t/90', '#title/movie/550/t/0', '#title/anime/30984/1/12/t/754', longest];
+    eq(good.map(safeNext), good, 'plain hash routes (up to 80 characters after #) pass — shared moments included');
+    ok(parseTitle(safeNext(longest)) && parseTitle(safeNext(longest)).t === 999999999, '...and the longest moment still parses after the carry');
     for (const bad of ['', '#', '//evil', '/#list', '#list/../x', 'https://x', 'https://x/#list', 'javascript:alert(1)', '#<script>', '#"><b>',
-      '#title/tv/1399?x=1', '#a b', '#%2F%2Fevil', '#a\nb', '#' + 'a'.repeat(81), 'list', null, undefined, 42, ['#list']]) {
+      '#title/tv/1399?x=1', '#a b', '#%2F%2Fevil', '#a\nb', '#' + 'a'.repeat(81), 'list', null, undefined, 42, ['#list'],
+      // a percent-encoded moment isn't carried ('%' is outside the allow-list): the apps only build plain digits
+      '#title/movie/550/t/%39%30']) {
       eq(safeNext(bad), '', 'dropped: ' + JSON.stringify(bad));
     }
   }

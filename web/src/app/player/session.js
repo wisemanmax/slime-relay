@@ -6,6 +6,8 @@
 //                     ({ url, quality, label, vt? } — vt: the file needs the Mac's remux)
 //   session.direct    extractor streams (anime rungs + ad-free) -> select values 'dx:<i>'
 //   session.resumeAt  saved position (s) to seek to once the <video> has metadata
+//   session.momentAt  a shared moment's start (s, '#title/…/t/<n>'), else null: when
+//                     set it wins over resumeAt and is honoured exactly (startPoint)
 //   session.gen       title generation, bumped by every play / playLive / close. An
 //                     async step captures it before awaiting and drops its result
 //                     when it is no longer current — a resolve that finishes after
@@ -28,7 +30,7 @@ export function createGen() {
 
 const titleGen = createGen();
 export const session = {
-  ctx: null, debrid: [], direct: [], resumeAt: 0,
+  ctx: null, debrid: [], direct: [], resumeAt: 0, momentAt: null,
   gen: 0, anime: null, vt: null, steps: [], step: 0,
 };
 /** Start a new title generation (play / playLive / close). */
@@ -59,6 +61,27 @@ export function mediaTime(v) {
   const t = (v && v.currentTime) || 0;
   return session.vt ? session.vt.baseOffset + t : t;
 }
+/** A shared moment's start against the title's length (s): `at` when it is
+    inside it, 0 (the top) at or past the end. A length that isn't known (0,
+    NaN, Infinity: not loaded yet, or live-shaped) trusts `at`. -> null when
+    `at` isn't a moment at all (absent, negative, not a finite number), so the
+    caller's own rule applies. Pure. */
+export function momentStart(at, duration) {
+  if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) return null;
+  return Number.isFinite(duration) && duration > 0 && at >= duration ? 0 : at;
+}
+
+/** Where the <video> starts a title, in seconds (0 = the top) once its length
+    is known: a moment exactly (momentStart — any 0 <= moment < duration), else
+    the saved resume point, and that only past the first 30 s and before the
+    last minute (a barely started or finished title starts over; an unbounded
+    length never resumes). Pure. */
+export function startPoint(moment, resume, duration) {
+  const m = momentStart(moment, duration);
+  if (m !== null) return m;
+  return resume > 30 && Number.isFinite(duration) && resume < duration - 60 ? resume : 0;
+}
+
 /** The title's length: the converter's probe duration (a rolling HLS reports
     Infinity / NaN), else the element's own. 0 = unknown. */
 export function mediaDuration(v) {

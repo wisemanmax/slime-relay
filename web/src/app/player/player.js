@@ -14,7 +14,8 @@
    (session.gen) and drops its result once anything newer started.
 
    Public surface:
-     play(it, kind, s, e)     start a title (kind 'movie' | 'tv')
+     play(it, kind, s, e, at) start a title (kind 'movie' | 'tv'); `at` = a shared
+                              moment's start (s), else omitted: the resume rule
      playLive(id, name)       start a Live TV channel
      closePlayer()            stop + remember position
      selectSource(val)        'rd:<i>' | 'dx:<i>' | a PROVIDERS id
@@ -28,7 +29,7 @@ import { recordContinue, savedPos, saveProgress, getPrefs, setPrefs } from '../s
 import { liveResolve, resolveEmbed } from '../api.js';
 import { onAction } from '../ui/actions.js';
 import { toast } from '../ui/toast.js';
-import { session, nextGen, isCurrentGen, setLoading, setHint, setBadge, setAudioBadge, isPlayerOpen, videoVisible, mediaTime, mediaDuration } from './session.js';
+import { session, nextGen, isCurrentGen, setLoading, setHint, setBadge, setAudioBadge, isPlayerOpen, videoVisible, mediaTime, mediaDuration, momentStart, startPoint } from './session.js';
 import { playHls, destroyHls, hlsInstance } from './hls.js';
 import { resolveDebrid, debridWhy, browserCaps } from './debrid.js';
 import { PROVIDERS, sourceOptionsHTML, resolveDirect, streamFromResolve } from './sources.js';
@@ -41,14 +42,19 @@ import { vtOpen, vtSeek, vtClose, vtSeekPlan, vtWindow, vtWhy } from './vt.js';
 let progTick = null;
 let ladderTok = 0;          // bumps when the ladder restarts within one title (Sub/Dub switch)
 let vtOffUntil = 0;         // the Mac didn't answer a remux: don't offer one again until then
+const VT_MAX_START = 172800;   // the Worker refuses a converter start past 48 h (worker/player.js vtCreate)
 
 const prefs = () => getPrefs();   // defaults filled in (animeAudio 'dub', …)
 
 // ── Ladder ──────────────────────────────────────────────────────────────────────
-export function play(it, kind, s, e) {
+export function play(it, kind, s, e, at) {
   stopVideo();                         // incl. closing a running converter session
   const gen = nextGen();
   session.ctx = { it, kind, s, e }; session.resumeAt = savedPos(it.id, kind, s, e);
+  // A shared moment ('#title/…/t/<n>') starts exactly there on every path that
+  // can seek (startPoint); the saved resume stays what Continue Watching keeps.
+  // Up Next and every other caller pass no `at`, so nothing inherits it.
+  session.momentAt = momentStart(at, 0);
   // A fresh title starts with nothing from the last one: its ad-free list used
   // to survive here and show up (and play) under the new title's picker.
   session.debrid = []; session.direct = []; session.anime = null; session.animeState = null;
@@ -157,8 +163,7 @@ async function animeStep(gen, live) {
 function onSourceFailed(gen, val, note) {
   if (!isCurrentGen(gen) || session.cur !== val) return;   // a late error from a source already left
   if (note) setHint(note);
-  const pos = mediaTime();
-  if (pos > 30) session.resumeAt = pos;   // the next rung picks up here
+  carryPosition();                      // the next rung picks up here
   stopVideo();
   if (val.startsWith('dx:')) {
     const st = session.direct[+val.slice(3)];
@@ -211,11 +216,24 @@ function closeVt() {
   setSubtitleTimeBase(0); showVtBar(false);
 }
 
-/** Resume where the viewer left off (skip if basically at the start or the very end). */
+/** A rung change (a failed source, the Sub/Dub switch) picks up where the viewer
+    is: a moment moves to the playhead once anything has played, so the next
+    rung still lands there exactly (a moment past the end that started at the
+    top, too); without one the resume point moves, past the first 30 s. */
+function carryPosition() {
+  const pos = mediaTime();
+  if (session.momentAt !== null) { if (pos > 0) session.momentAt = pos; }
+  else if (pos > 30) session.resumeAt = pos;
+}
+
+/** Start where startPoint says once the length is known: a shared moment
+    exactly, else resume where the viewer left off (skipped if basically at the
+    start or the very end). Native <video> files and both HLS engines (Safari's,
+    hls.js) all come through here. */
 function armResume(vid) {
   vid.onloadedmetadata = () => {
-    const d = vid.duration;
-    if (session.resumeAt > 30 && Number.isFinite(d) && session.resumeAt < d - 60) { try { vid.currentTime = session.resumeAt; } catch (_) {} }
+    const to = startPoint(session.momentAt, session.resumeAt, vid.duration);
+    if (to > 0) { try { vid.currentTime = to; } catch (_) {} }
   };
 }
 
@@ -292,10 +310,18 @@ function showAnimeAudio(a) {
 async function startVt(gen, val, st) {
   setLoading(true, 'Converting on your Mac — this file is an mkv the browser can\'t open directly…');
   setHint('<b>Debrid HD · converted on your Mac</b> — remuxed for the browser (picture untouched). Seeking far restarts the conversion there.');
-  const start = session.resumeAt > 30 ? session.resumeAt : 0;
+  // The conversion starts at the moment, else at the resume point. The probe's
+  // duration only comes back WITH the open, so the one bound known up front is
+  // the Worker's: a start past 48 h (longer than anything) counts as past the end.
+  const m = momentStart(session.momentAt, VT_MAX_START);
+  const start = m !== null ? m : (session.resumeAt > 30 ? session.resumeAt : 0);
   const a = session.anime;
   const audio = a && a.anime && audioPref(prefs()) === 'sub' ? 'jpn' : 'eng';
-  const r = await vtOpen(st.url, start, audio);
+  let r = await vtOpen(st.url, start, audio);
+  // A moment past the file's end leaves ffmpeg nothing to write, which the Mac
+  // answers 'convert-failed': once, from the top — past the end plays from the
+  // start, as on every other path. (A file it truly can't remux says so again.)
+  if (!r.ok && r.error === 'convert-failed' && m > 0 && isCurrentGen(gen) && session.cur === val) r = await vtOpen(st.url, 0, audio);
   if (!isCurrentGen(gen) || session.cur !== val) { if (r.ok) vtClose(r.session); return; }
   if (!r.ok) {
     // ONE converter job at a time on the Mac: busy now = busy for every file,
@@ -387,7 +413,7 @@ function toggleAnimeAudio() {
   toast('Anime audio: ' + (next === 'dub' ? 'Dub (English)' : 'Sub (Japanese + subtitles)'), { id: 'anime-audio' });
   if (!session.ctx || !(session.anime && session.anime.anime)) return;
   const gen = session.gen;
-  const pos = mediaTime(); if (pos > 30) session.resumeAt = pos;
+  carryPosition();
   stopVideo();
   session.cur = ''; session.animeState = null;
   session.direct = session.direct.filter(x => x.step !== 'anime');
@@ -399,8 +425,10 @@ function toggleAnimeAudio() {
 onAction('player-audio', () => toggleAnimeAudio());
 
 // A dead/unsupported link → the next rung (see onSourceFailed).
+// Only a moment reaches an embed (VidLink's startAt; the others start at the
+// top); a saved resume never has.
 function loadFrame(pid) { const p = PROVIDERS.find(x => x[0] === pid); if (!p || !session.ctx) return;
-  $('pframe').src = p[2](session.ctx.it.id, session.ctx.kind, session.ctx.s, session.ctx.e); }
+  $('pframe').src = p[2](session.ctx.it.id, session.ctx.kind, session.ctx.s, session.ctx.e, session.momentAt || 0); }
 function switchProvider() { selectSource($('psel').value); }
 
 export function closePlayer() {
@@ -412,7 +440,7 @@ export function closePlayer() {
   $('player').classList.remove('open');
   $('pframe').src = 'about:blank'; setBadge(false); setAudioBadge(''); hideUpNext();
   session.ctx = null; session.debrid = []; session.direct = []; session.anime = null; session.animeState = null;
-  session.steps = []; session.cur = '';
+  session.steps = []; session.cur = ''; session.momentAt = null;
   closeSubtitles(); resetSkip(); syncAudioToggle();
   syncPipButton();
 }
@@ -423,7 +451,7 @@ export async function playLive(id, name) {
   const gen = nextGen();
   $('ptitle').textContent = name;
   hideUpNext(); setHint(''); setBadge(false); setAudioBadge('');
-  session.ctx = null; session.debrid = []; session.direct = []; session.anime = null; session.steps = []; session.cur = 'live';
+  session.ctx = null; session.debrid = []; session.direct = []; session.anime = null; session.steps = []; session.cur = 'live'; session.momentAt = null;
   resetSubtitles(gen, null); resetSkip(); syncAudioToggle();
   $('psel').innerHTML = '<option>Live</option>';
   const f0 = $('pframe'); f0.src = 'about:blank'; f0.style.display = 'none';

@@ -3,12 +3,16 @@
 // the tools itself against TMDB (it already has the client, and the viewer's
 // watch history never leaves the device unless they turned sharing on).
 //
-// Request  { messages: [...], history: bool }
+// Request  { messages: [...], history: bool, family?: [string] }
 //   messages  the conversation so far WITHOUT a system message: user turns,
 //             assistant turns (with any tool_calls / reasoning_content exactly as
 //             received) and tool results ({ role:'tool', tool_call_id, content }).
 //   history   the viewer allowed their My List + recently watched titles; adds
 //             the my_titles tool.
+//   family    Family night (prompt v9): the profile NAMES the viewer picked to
+//             watch together (2–6, names only). Adds the pick_for_profiles tool
+//             and its prompt rules; the app runs it on the device, so no one's
+//             history comes here. Old builds never send it and never see the tool.
 // Response { message, finish_reason } — the model's next assistant message.
 //
 // The key is a paid one and USER_TOKEN ships inside the app, so this route is
@@ -24,6 +28,8 @@ const MAX_MESSAGES = 80;
 const MAX_BODY_BYTES = 64_000;
 const MAX_CONTENT = 6_000;
 const MAX_TOOL_CALLS = 32;
+const MAX_FAMILY = 6;
+const MAX_FAMILY_NAME = 40;
 
 const GENRES = [
   'Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama',
@@ -32,7 +38,7 @@ const GENRES = [
 ];
 
 // Bump when the prompt or tools change, so an eval run records what it tested.
-const PROMPT_VERSION = 8;
+const PROMPT_VERSION = 9;
 
 const SYSTEM_PROMPT = `You are "Ask", the assistant inside SlimeWatch, a streaming app with movies, TV series and anime. Your one job is helping the viewer pick something to watch. Everything you recommend can be played in SlimeWatch.
 
@@ -86,7 +92,20 @@ Out of scope
 - Pornography or sexually explicit requests: decline briefly, empty picks.
 - Heavy topics (grief, illness, war, suicide) are fine to recommend around: be kind and pick thoughtful titles.`;
 
-function toolDefs(history) {
+// Appended to the system prompt for a Family-night conversation only. The names
+// are JSON-quoted so a profile name reads as a name, never as an instruction.
+function familyRules(family) {
+  const names = family.map((n) => JSON.stringify(n)).join(', ');
+  return `Family night
+- The viewer is choosing one thing to watch together with these profiles: ${names}. Start with pick_for_profiles, passing those names (and kind when the viewer asked for a movie or a series).
+- Its results already fit everyone's taste and the strictest age rating among them. Recommend from them, best first; each result's reason is a good start (keep it under 15 words).
+- Its reasons compare genres only: never claim to know what anyone watched, liked or saved, and never mention match scores.
+- If it returns too few, add discover picks using its shared_genres and, for movies, its max_age_rating, and say in message that those are a broader fit.
+- Never pick anything above the age rating it reports; if the viewer asks for that, say Family night keeps to it.
+- Follow-ups stay in Family night: call pick_for_profiles again (with the new kind if it changed), or refine with discover under the same max_age_rating.`;
+}
+
+function toolDefs(history, family = null) {
   const kind = { type: 'string', enum: ['movie', 'tv'], description: 'movie or tv (anime series are tv)' };
   const tools = [
     fn('search_titles', 'Find movies and series by title (or a distinctive phrase from one). Returns up to 10 matches with year, rating, genres and a short overview.', {
@@ -124,6 +143,12 @@ function toolDefs(history) {
   ];
   if (history) {
     tools.push(fn('my_titles', "The viewer's My List and recently watched titles, newest first, each with a status (My List, Watching, Watched).", {}, []));
+  }
+  if (family) {
+    tools.push(fn('pick_for_profiles', "Family night: titles none of the named profiles has seen that fit every one of their tastes (compared by genre on the viewer's device) and the strictest age rating among them, best first, each with a short reason. Also returns shared_genres and, when capped, age_cap and max_age_rating.", {
+      profiles: { type: 'array', minItems: 2, items: { type: 'string', enum: family }, description: 'Two or more of the Family night profile names' },
+      kind: { type: 'string', enum: ['movie', 'tv', 'any'], description: 'Default any' },
+    }, ['profiles']));
   }
   tools.push(fn('recommend', 'Show the viewer your answer. Call exactly once, last.', {
     message: { type: 'string', description: 'One or two plain sentences to the viewer, in their language' },
@@ -181,6 +206,26 @@ function cleanMessages(raw) {
   return out[0].role === 'user' ? out : null;
 }
 
+// Family night's names: strings only, control characters stripped, trimmed,
+// each at most 40 characters, no repeats (case-insensitive), the first six.
+// Anything else is ignored; fewer than two left means no Family night (never a 400).
+function cleanFamily(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const name = v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '').trim();
+    if (!name || name.length > MAX_FAMILY_NAME) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+    if (out.length === MAX_FAMILY) break;
+  }
+  return out.length >= 2 ? out : null;
+}
+
 async function count(env, key, limit, ttl) {
   try {
     const n = Number(await env.SERVERS.get(key)) || 0;
@@ -207,6 +252,8 @@ export async function handleAssist(request, env, { isUser, clientIP, json, rateL
   let body; try { body = JSON.parse(text); } catch { return json({ error: 'bad json' }, 400); }
   const messages = cleanMessages(body?.messages);
   if (!messages) return json({ error: 'bad messages' }, 400);
+  const family = cleanFamily(body?.family);
+  const system = family ? `${SYSTEM_PROMPT}\n\n${familyRules(family)}` : SYSTEM_PROMPT;
 
   let upstream;
   try {
@@ -218,8 +265,8 @@ export async function handleAssist(request, env, { isUser, clientIP, json, rateL
         // Non-thinking: a TV remote user is waiting on this, and picking films
         // from tool results doesn't need a long think.
         thinking: { type: 'disabled' },
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
-        tools: toolDefs(!!body.history),
+        messages: [{ role: 'system', content: system }, ...messages],
+        tools: toolDefs(!!body.history, family),
         max_tokens: 1500,
         temperature: 0.7,
       }),
@@ -237,4 +284,4 @@ export async function handleAssist(request, env, { isUser, clientIP, json, rateL
   return json({ message: choice.message, finish_reason: choice.finish_reason ?? null, prompt_version: PROMPT_VERSION });
 }
 
-export { cleanMessages, toolDefs };
+export { cleanMessages, cleanFamily, familyRules, toolDefs };

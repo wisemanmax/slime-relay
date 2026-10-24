@@ -16,10 +16,10 @@ import {
   maybeAnime, isNoStream, audioPref, ANIME_HOSTS,
 } from '../src/app/player/anime.js';
 import { pickDebridStreams, debridWhy } from '../src/app/player/debrid.js';
-import { createGen } from '../src/app/player/session.js';
+import { createGen, momentStart, startPoint } from '../src/app/player/session.js';
 import { vtSeekPlan, vtFailure } from '../src/app/player/vt.js';
 import { parseAniSkip, activeSkip } from '../src/app/player/skip.js';
-import { streamFromResolve } from '../src/app/player/sources.js';
+import { streamFromResolve, PROVIDERS } from '../src/app/player/sources.js';
 import { playerRoutes, vtPlayUrl, intParam, titleParams, vtStatus } from '../src/worker/player.js';
 
 // ── A minimal DOM for the real player code ──────────────────────────────────────
@@ -210,6 +210,27 @@ export async function runPlayerChecks() {
       eq(streamFromResolve({ play: 'https://x/hls/1.m3u8', type: 'hls', subs: [{ lang: 'en', name: 'English', url: 'https://x/vtt/1/0' }, { lang: 'x' }] }, 'h'),
          { url: 'https://x/hls/1.m3u8', label: 'h', type: 'hls', subs: [{ lang: 'en', name: 'English', url: 'https://x/vtt/1/0' }] }, 'resolve -> stream record');
       eq([streamFromResolve({ error: 'resolve-502' }), streamFromResolve({ play: 'javascript:x' })], [null, null], 'no stream / bad URL');
+    }
+
+    // ── Where playback starts: a shared moment ('#title/…/t/<n>') vs the resume rule ──
+    {
+      eq([momentStart(90, 5400), momentStart(0, 5400), momentStart(5399, 5400)], [90, 0, 5399], 'a moment inside the length starts exactly there (t/0 = the top)');
+      eq([momentStart(5400, 5400), momentStart(6000, 5400)], [0, 0], 'at or past the end: from the start');
+      eq([momentStart(90, NaN), momentStart(90, Infinity), momentStart(90, 0)], [90, 90, 90], 'an unknown length trusts the moment');
+      eq([momentStart(undefined, 5400), momentStart(null, 5400), momentStart(-1, 5400), momentStart(NaN, 5400), momentStart('90', 5400)],
+         [null, null, null, null, null], 'no moment (or not a number) -> null: the caller\'s rule applies');
+      eq([startPoint(600, 1200, 5400), startPoint(0, 1200, 5400), startPoint(10, 0, 5400), startPoint(5390, 0, 5400)], [600, 0, 10, 5390],
+         'a moment wins over the saved position, exactly — t/0 too, and inside the first 30 s or the last minute');
+      eq([startPoint(5400, 1200, 5400), startPoint(9e8, 1200, 5400)], [0, 0], 'a moment at/past the end plays from the start (not the resume point)');
+      eq([startPoint(null, 1200, 5400), startPoint(null, 20, 5400), startPoint(null, 5350, 5400), startPoint(null, 1200, NaN), startPoint(null, 1200, Infinity), startPoint(null, 0, 5400)],
+         [1200, 0, 0, 0, 0, 0], 'no moment: today\'s resume rule (> 30 s, < duration - 60, finite length)');
+      const vidlink = PROVIDERS.find(p => p[0] === 'vidlink')[2];
+      eq([vidlink(550, 'movie', 1, 1, 754.9), vidlink(1399, 'tv', 2, 3, 90), vidlink(550, 'movie', 1, 1), vidlink(550, 'movie', 1, 1, 0)], [
+        'https://vidlink.pro/movie/550?autoplay=true&title=false&primaryColor=43e048&startAt=754',
+        'https://vidlink.pro/tv/1399/2/3?autoplay=true&title=false&primaryColor=43e048&startAt=90',
+        'https://vidlink.pro/movie/550?autoplay=true&title=false&primaryColor=43e048',
+        'https://vidlink.pro/movie/550?autoplay=true&title=false&primaryColor=43e048'], 'VidLink takes startAt (whole seconds) only for a moment past 0');
+      ok(PROVIDERS.filter(p => p[0] !== 'vidlink').every(p => !/start/i.test(p[2](550, 'movie', 1, 1, 754) + p[2](1399, 'tv', 2, 3, 754))), 'the other embeds have no start parameter: they start at the top');
     }
 
     // ── Worker: /api/player/* ──────────────────────────────────────────────────
@@ -458,6 +479,109 @@ export async function runPlayerChecks() {
       closePlayer();
       await flush(5);
       eq(vtCalls[vtCalls.length - 1], 'DELETE sessions/ab', 'closing frees the Mac\'s converter slot');
+
+      // Shared moments, on the real player: every path that can seek starts at `at`.
+      const { recordContinue } = await import('../src/app/state.js');
+      const mp4 = (name) => ({ url: 'https://rd/' + name, name: 'RD+ 1080p', title: name, behaviorHints: { filename: name } });
+      let debridFiles = [mp4('Moment.1080p.WEB.mp4'), mp4('Moment.1080p.WEBRip.mp4')];
+      vtCalls.length = 0;
+      let vtOpenAnswer = () => jsonRes({ id: 'cd', play: 'https://ex/vt/cd/1/index.m3u8?cap=dd', epoch: 1, duration: 5400, actualStart: 0 });
+      globalThis.fetch = async (u, init = {}) => {
+        const url = String(u);
+        if (url.startsWith('/api/tmdb/') && url.includes('/season/')) return jsonRes({ episodes: [{ episode_number: 1 }, { episode_number: 2 }] });
+        if (url.startsWith('/api/tmdb/')) return jsonRes({ imdb_id: 'tt0000077' });
+        if (url.startsWith('https://torrentio.strem.fun/')) return jsonRes({ streams: debridFiles });
+        if (url.startsWith('/api/player/animeids')) return jsonRes({ anime: false });
+        if (url.startsWith('/api/player/vt/')) {
+          const body = init.body ? JSON.parse(init.body) : null;
+          vtCalls.push((init.method || 'GET') + ' ' + url.slice('/api/player/vt/'.length) + (body ? ' ' + body.start : ''));
+          return init.method === 'DELETE' ? jsonRes({ ok: true }) : vtOpenAnswer(body);
+        }
+        if (url.startsWith('/api/resolve')) return jsonRes({ error: 'resolve-502' });
+        return jsonRes({});
+      };
+      const v = el('pvideo');
+      const metadata = (duration) => { v.currentTime = 0; v.duration = duration; v.onloadedmetadata(); return v.currentTime; };
+      const waitSrc = async (re) => { for (let i = 0; i < 80 && !re.test(v.src); i++) await flush(2); return v.src; };
+      const film = { id: 7070, title: 'Moment Film', genre_ids: [18] };
+
+      // A debrid file (native <video>): the moment, exactly; past the end, the top.
+      play(film, 'movie', 1, 1, 754);
+      eq(await waitSrc(/Moment/), 'https://rd/Moment.1080p.WEB.mp4', 'a film moment plays the debrid file');
+      eq([session.momentAt, metadata(5400)], [754, 754], '...from the moment (< 30 s from the start or not)');
+      play(film, 'movie', 1, 1, 6000); await waitSrc(/Moment/);
+      eq(metadata(5400), 0, 'a moment past the end plays from the start');
+      // The saved resume is untouched: t/0 starts at the top over it; no moment resumes as before.
+      recordContinue(film, 'movie', 1, 1, 1200);
+      play(film, 'movie', 1, 1, 0); await waitSrc(/Moment/);
+      eq([session.resumeAt, session.momentAt, metadata(5400)], [1200, 0, 0], 't/0 starts at the top even with a saved position');
+      play(film, 'movie', 1, 1); await waitSrc(/Moment/);
+      eq([session.momentAt, metadata(5400)], [null, 1200], 'no moment: the normal resume');
+      // A source that dies after playing hands the NEXT rung the playhead, still exact.
+      play(film, 'movie', 1, 1, 754); await waitSrc(/Moment/); metadata(5400);
+      v.currentTime = 800; v.onerror();
+      eq([await waitSrc(/WEBRip/), session.momentAt, metadata(5400)], ['https://rd/Moment.1080p.WEBRip.mp4', 800, 800], 'a failed rung carries the moment to the playhead');
+      // Up Next never inherits a moment.
+      play({ id: 7071, name: 'Moment Show' }, 'tv', 1, 1, 300);
+      eq(session.momentAt, 300, 'an episode moment');
+      await flush(20);
+      await autoNext(play);
+      eq([session.ctx.e, session.momentAt], [2, null], 'Up Next starts the next episode normally');
+      closePlayer();
+      eq(session.momentAt, null, 'closing forgets the moment');
+      await flush(10);
+
+      // The /vt converter: opened AT the moment; past the file's end, once more from the top.
+      debridFiles = [{ url: 'https://rd/Moment.1080p.x264.mkv', name: 'RD+ 1080p', title: 'Moment.1080p.BluRay.x264.AAC.mkv', behaviorHints: { filename: 'Moment.1080p.BluRay.x264.AAC.mkv' } }];
+      play({ id: 7072, title: 'Moment Mkv', genre_ids: [18] }, 'movie', 1, 1, 754);
+      await waitSrc(/vt\/cd/);
+      eq(vtCalls, ['POST sessions 754'], 'the converter starts at the moment');
+      closePlayer(); await flush(5); vtCalls.length = 0;
+      vtOpenAnswer = (b) => b.start > 0 ? jsonRes({ error: 'convert-failed' }, 502) : jsonRes({ id: 'cd', play: 'https://ex/vt/cd/1/index.m3u8?cap=dd', epoch: 1, duration: 5400, actualStart: 0 });
+      play({ id: 7073, title: 'Moment Mkv 2', genre_ids: [18] }, 'movie', 1, 1, 6000);
+      eq(await waitSrc(/vt\/cd/), 'https://ex/vt/cd/1/index.m3u8?cap=dd', 'past the end: the remux still plays...');
+      eq(vtCalls, ['POST sessions 6000', 'POST sessions 0'], '...from the top, after ONE retry');
+      closePlayer(); await flush(5); vtCalls.length = 0;
+      play({ id: 7074, title: 'Moment Mkv 3', genre_ids: [18] }, 'movie', 1, 1, 999999999);
+      await waitSrc(/vt\/cd/);
+      eq(vtCalls, ['POST sessions 0'], 'a moment past the Worker\'s 48 h bound opens at 0 (never a 400)');
+      closePlayer(); await flush(5); vtCalls.length = 0;
+      vtOpenAnswer = () => jsonRes({ error: 'convert-failed' }, 502);
+      play({ id: 7075, title: 'Moment Mkv 4', genre_ids: [18] }, 'movie', 1, 1);
+      for (let i = 0; i < 80 && session.cur !== 'vidlink'; i++) await flush(2);
+      eq(vtCalls, ['POST sessions 0'], 'no moment: a failed remux is never retried');
+
+      // The embed rung: VidLink gets the moment; with none, the URL is unchanged.
+      debridFiles = [];
+      play(film, 'movie', 1, 1, 754);
+      for (let i = 0; i < 80 && session.cur !== 'vidlink'; i++) await flush(2);
+      eq(el('pframe').src, 'https://vidlink.pro/movie/7070?autoplay=true&title=false&primaryColor=43e048&startAt=754', 'the embed rung starts VidLink at the moment');
+      play(film, 'movie', 1, 1);
+      for (let i = 0; i < 80 && session.cur !== 'vidlink'; i++) await flush(2);
+      eq(el('pframe').src, 'https://vidlink.pro/movie/7070?autoplay=true&title=false&primaryColor=43e048', '...and without one, exactly as before');
+      closePlayer();
+      await flush(5);
+
+      // The link itself (views/detail.js viewTitle): a film moment plays; a plain film link still only opens the sheet.
+      globalThis.document.querySelectorAll = () => [];   // the season bar's buttons
+      const { viewTitle, closeDetail } = await import('../src/app/views/detail.js');
+      const ladderFetch = globalThis.fetch;
+      globalThis.fetch = async (u, init) => {
+        const url = String(u);
+        if (url === '/api/tmdb/movie/7080') return jsonRes({ id: 7080, title: 'Linked Film', runtime: 100, genres: [] });
+        if (url === '/api/tmdb/tv/7081') return jsonRes({ id: 7081, name: 'Linked Show', genres: [], seasons: [{ season_number: 1, episode_count: 2, name: 'Season 1' }] });
+        return ladderFetch(u, init);
+      };
+      await viewTitle('#title/movie/7080', '#home');
+      eq([el('modal').classList.contains('open'), session.ctx], [true, null], 'a plain film link opens the sheet and plays nothing (unchanged)');
+      await viewTitle('#title/movie/7080/t/90', '#home');
+      eq([session.ctx && session.ctx.it.id, session.ctx && session.ctx.kind, session.momentAt], [7080, 'movie', 90], 'a film moment plays the film from the moment');
+      await viewTitle('#title/tv/7081/1/2/t/45', '#home');
+      eq([session.ctx.it.id, session.ctx.kind, session.ctx.s, session.ctx.e, session.momentAt], [7081, 'tv', 1, 2, 45], 'an episode moment plays that episode from the moment');
+      await viewTitle('#title/tv/7081/1/2', '#home');
+      eq([session.ctx.e, session.momentAt], [2, null], 'an episode link without one plays as before');
+      closeDetail(); closePlayer();
+      await flush(20);
     }
   } finally {
     globalThis.fetch = realFetch;

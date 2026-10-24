@@ -119,12 +119,15 @@ const call = (path, init) => worker.fetch(new Request('https://watch.example' + 
   ok(/^sw_auth=[a-f0-9]{64};/.test(setCookie) && !/domain=/i.test(setCookie), 'login cookie missing, or not host-only (must work on any host)');
   // A link opened while signed out lands where it pointed — a plain hash route only (src/worker/next.js).
   ok(login.includes('name="next"') && login.includes('location.hash'), 'login page does not carry the hash in a next field');
-  for (const [next, want] of [['#title/tv/1399/2/3', '/#title/tv/1399/2/3'], ['#list', '/#list'], ['//evil.example', '/'], ['https://evil.example/#list', '/'], ['#<script>', '/']]) {
+  for (const [next, want] of [['#title/tv/1399/2/3', '/#title/tv/1399/2/3'], ['#list', '/#list'], ['//evil.example', '/'], ['https://evil.example/#list', '/'], ['#<script>', '/'],
+    ['#title/tv/1399/2/3/t/90', '/#title/tv/1399/2/3/t/90'], ['#title/movie/550/t/0', '/#title/movie/550/t/0']]) {   // shared moments survive sign-in
     r = await call('/login', { method: 'POST', body: new URLSearchParams({ password: 'check-pw', next }) });
     ok(r.status === 302 && r.headers.get('location') === want, `login with next=${JSON.stringify(next)} redirected to ${r.headers.get('location')}, expected ${want}`);
   }
   r = await call('/login', { method: 'POST', body: new URLSearchParams({ password: 'nope', next: '#list' }) });
   ok(r.status === 401 && (await r.text()).includes('name="next" id="next" value="#list"'), 'a wrong password loses the next hash');
+  r = await call('/login', { method: 'POST', body: new URLSearchParams({ password: 'nope', next: '#title/movie/550/t/3600' }) });
+  ok(r.status === 401 && (await r.text()).includes('name="next" id="next" value="#title/movie/550/t/3600"'), 'a wrong password loses a moment hash');
   r = await call('/login', { method: 'POST', body: new URLSearchParams({ password: 'nope', next: '"><script>x()</script>' }) });
   ok(r.status === 401 && !(await r.text()).includes('x()'), 'a disallowed next is echoed into the login page');
 

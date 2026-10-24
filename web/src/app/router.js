@@ -43,21 +43,33 @@ export const routeHash = (base, ...args) => '#' + [base, ...args.map(a => encode
     (worker.js AASA), in the grammar the app reads them with (AppRoute.webRoute):
       '#title/<movie|tv|anime>/<tmdbId>'                 the title's sheet
       '#title/<tv|anime>/<tmdbId>/<season>/<episode>'    that episode (season 0 = specials)
-    'anime' is a TMDB tv id. -> { kind: 'movie'|'tv', anime, id[, s, e] }, or null
-    for anything else: another segment count, an unknown kind, an id that isn't
-    1-9 plain digits or is 0, a film with an episode, episode 0. */
+      '#title/<tv|anime>/<tmdbId>/<season>/<episode>/t/<seconds>'
+      '#title/movie/<tmdbId>/t/<seconds>'                a shared moment: plays from there
+    'anime' is a TMDB tv id. -> { kind: 'movie'|'tv', anime, id[, s, e][, t] }, or
+    null for anything else: another segment count, an unknown kind, an id that
+    isn't 1-9 plain digits or is 0, a film with an episode, episode 0, a moment
+    on a show with no episode, a moment segment other than 't', seconds that
+    aren't 1-9 plain digits (0 — the start — is legal, unlike an id). */
 export function parseTitle(hash) {
   if (String(hash || '').slice(1).split('/')[0] !== 'title') return null;
   const args = routeArgs(hash);
-  if (args.length !== 2 && args.length !== 4) return null;
-  const [kind, rawId, rawS, rawE] = args;
   const num = (raw) => /^[0-9]{1,9}$/.test(raw) ? Number(raw) : null;
+  // A moment is two trailing segments: the literal 't', then whole seconds.
+  const at = (seg, raw) => seg === 't' ? num(raw) : null;
+  const [kind, rawId, a, b, c, d] = args;
   const id = num(rawId);
   if (!['movie', 'tv', 'anime'].includes(kind) || !id) return null;
-  const t = { kind: kind === 'movie' ? 'movie' : 'tv', anime: kind === 'anime', id };
-  if (args.length === 2) return t;
-  const s = num(rawS), e = num(rawE);
-  return kind !== 'movie' && s !== null && e ? { ...t, s, e } : null;
+  const title = { kind: kind === 'movie' ? 'movie' : 'tv', anime: kind === 'anime', id };
+  if (args.length === 2) return title;
+  if (kind === 'movie') {   // a film has no episode: only a moment may follow its id
+    const t = args.length === 4 ? at(a, b) : null;
+    return t === null ? null : { ...title, t };
+  }
+  const s = num(a), e = num(b);
+  if ((args.length !== 4 && args.length !== 6) || s === null || !e) return null;
+  if (args.length === 4) return { ...title, s, e };
+  const t = at(c, d);
+  return t === null ? null : { ...title, s, e, t };
 }
 
 /** Navigate (identical to clicking a link to `hash`; same hash = no re-render). */

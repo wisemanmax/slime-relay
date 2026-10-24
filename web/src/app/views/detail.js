@@ -57,31 +57,38 @@ export async function openDetail(id, kind, want = null) { const modal = $('modal
   return d;
 }
 
-/* '#title/<movie|tv|anime>/<id>[/<season>/<episode>]' (router.parseTitle) — the
-   links the apps' universal links claim, for anyone without the app. main.js
-   route() renders it over the view on screen; `back` is that view's hash, where
-   closing the sheet returns (dismissDetail). An episode link plays that episode
-   through the normal play path once the sheet has loaded and "Who's watching?"
-   is gone (a first visit opens it): until then the episode waits, marked, in
-   the sheet. A pick re-renders the route (profiles.js), which lands here again
-   and plays it; a picker that just closes (no profiles on this site) lets this
-   call play it. A browser that blocks autoplay without a tap leaves the player
-   paused on its own controls, as it does after any slow resolve. */
+/* '#title/<movie|tv|anime>/<id>[/<season>/<episode>][/t/<seconds>]'
+   (router.parseTitle) — the links the apps' universal links claim, for anyone
+   without the app. main.js route() renders it over the view on screen; `back`
+   is that view's hash, where closing the sheet returns (dismissDetail). An
+   episode link plays that episode through the normal play path once the sheet
+   has loaded and "Who's watching?" is gone (a first visit opens it): until then
+   the episode waits, marked, in the sheet. A pick re-renders the route
+   (profiles.js), which lands here again and plays it; a picker that just
+   closes (no profiles on this site) lets this call play it. A browser that
+   blocks autoplay without a tap leaves the player paused on its own controls,
+   as it does after any slow resolve. A shared moment ('/t/<seconds>') plays the
+   same way from that second — a film's too, where a plain film link only opens
+   its sheet. */
 export async function viewTitle(hash, back) {
   titleBack = back || '#home';
   const t = parseTitle(hash);
   if (!t) { loadTok++; $('modal').classList.add('open'); $('sheet').innerHTML = notice('That link doesn\'t point to a title.'); return; }
   const want = t.e ? { s: t.s, e: t.e } : null;
   const d = await openDetail(t.id, t.kind, want);
-  if (!d || !want) return;
-  const season = (d.seasons || []).find(x => x.season_number === want.s);
-  if (!season || want.e > (season.episode_count || 0)) {
-    toast(`Season ${want.s}, episode ${want.e} isn't listed for ${titleOf(d)}.`);
-    return;
+  if (!d || (!want && t.t === undefined)) return;   // a title link (no episode, no moment) is the sheet alone
+  if (want) {
+    const season = (d.seasons || []).find(x => x.season_number === want.s);
+    if (!season || want.e > (season.episode_count || 0)) {
+      toast(`Season ${want.s}, episode ${want.e} isn't listed for ${titleOf(d)}.`);
+      return;
+    }
   }
   const tok = loadTok;   // a closed or replaced sheet (incl. that re-render) stops this one
   while (isProfilesOpen()) { await new Promise(r => setTimeout(r, 250)); if (tok !== loadTok) return; }
-  if (tok === loadTok) play(d, 'tv', want.s, want.e);
+  if (tok !== loadTok) return;
+  // parseTitle gives a moment only to a film or an episode, so no `want` here = a film.
+  if (want) play(d, 'tv', want.s, want.e, t.t); else play(d, 'movie', 1, 1, t.t);
 }
 
 /* Anime only: which audio Play asks for first (prefs.animeAudio, shared with
