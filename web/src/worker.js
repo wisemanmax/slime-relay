@@ -9,6 +9,7 @@
 import { PAGE, NONCE_PLACEHOLDER } from './generated/page.js';
 import { STATIC } from './generated/static.js';
 import { dispatch } from './worker/modules.js';
+import { safeNext } from './worker/next.js';
 
 const COOKIE = 'sw_auth';
 
@@ -23,6 +24,22 @@ export default {
     const asset = staticAsset(url.pathname, request.method);
     if (asset) return asset;
 
+    // Universal links (roadmap 3.3) — also UNGATED: Apple's CDN fetches this
+    // file without a cookie, and must get the JSON itself (a redirect to
+    // /login fails verification), at both of the paths it tries.
+    if (url.pathname === '/.well-known/apple-app-site-association' || url.pathname === '/apple-app-site-association') {
+      return aasa(request.method);
+    }
+
+    // A party invite on this host. With SlimeWatch installed the phone opens
+    // the app and this never runs; without it, the relay's public join page
+    // (code, host, "open the app") — the same page the apps' invite text links.
+    const invite = url.pathname.match(/^\/p\/([A-Za-z0-9]{6})\/?$/);
+    if (invite && env.RELAY_BASE && PARTY_CODE_RE.test(invite[1].toUpperCase())) {
+      const target = env.RELAY_BASE.replace(/\/+$/, '') + '/p/' + invite[1].toUpperCase();
+      return new Response(null, { status: 302, headers: { location: target, 'cache-control': 'no-store' } });
+    }
+
     // ── Auth token: a hash of the two secrets. Can't be forged without them. ──
     const expected = await authToken(env);
 
@@ -31,16 +48,17 @@ export default {
       if (request.method === 'POST') {
         const form = await request.formData();
         const pw = String(form.get('password') || '');
+        const next = safeNext(String(form.get('next') || ''));   // the link they opened, if a plain hash route
         if (env.SITE_PASSWORD && pw === env.SITE_PASSWORD) {
           return new Response(null, {
             status: 302,
             headers: {
-              'location': '/',
+              'location': '/' + next,
               'set-cookie': `${COOKIE}=${expected}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`,
             },
           });
         }
-        return html(loginPage(true), 401);
+        return html(loginPage(true, next), 401);
       }
       return html(loginPage(false));
     }
@@ -168,6 +186,35 @@ function appPage() {
       'content-security-policy':
         `script-src 'nonce-${nonce}' 'self' 'unsafe-inline'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'`,
     },
+  });
+}
+
+/* apple-app-site-association: which watch.byheir.com links open the iPhone
+   app (Apple's `components` grammar; `?` = one character, `*` = any run). Kept
+   to exactly what the app maps (AppRoute.parseUniversalLink in the app repo):
+   a party invite /p/<6-char code>, and the SPA's hash routes #title/<kind>/<id>
+   (a title page; /<season>/<episode> plays it) and #list (My List). Every
+   other route stays the web app's, even on a phone with SlimeWatch. The app's
+   half is the applinks:watch.byheir.com entitlement in its dev build. */
+const AASA = JSON.stringify({
+  applinks: {
+    details: [{
+      appIDs: ['AT8J7FQGQS.com.bwise.slimewatch'],
+      components: [
+        { '/': '/p/??????', comment: 'Watch Party invite' },
+        { '/': '/', '#': 'title/*', comment: 'A title page, or an episode' },
+        { '/': '/', '#': 'list', comment: 'My List' },
+      ],
+    }],
+  },
+});
+/** Room codes: the relay's alphabet (no 0/O/1/I), six characters. */
+const PARTY_CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
+
+function aasa(method) {
+  if (method !== 'GET' && method !== 'HEAD') return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
+  return new Response(method === 'HEAD' ? null : AASA, {
+    headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=3600', 'x-content-type-options': 'nosniff' },
   });
 }
 
@@ -308,7 +355,10 @@ async function rdCheck(request) {
   }
 }
 
-function loginPage(failed) {
+/* `next`: an already-allowed hash (safeNext) to keep across a wrong password —
+   the 401 page's URL is the POST's, which has no fragment. The inline script
+   copies the hash a signed-out link arrived with (worker/next.js). */
+function loginPage(failed, next = '') {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>SlimeWatch</title>
 <meta name="theme-color" content="#0a0d0b">
@@ -338,7 +388,9 @@ function loginPage(failed) {
     <p>Private access</p>
     <div class="err">Wrong password — try again.</div>
     <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password">
+    <input type="hidden" name="next" id="next" value="${safeNext(next)}">
     <button type="submit">Enter</button>
   </form>
+  <script>if (location.hash) document.getElementById('next').value = location.hash;</script>
 </body></html>`;
 }

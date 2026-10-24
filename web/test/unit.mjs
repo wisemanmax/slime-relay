@@ -7,9 +7,10 @@ import {
   createStore, memoryStorage, SCHEMA,
   toggleList, inList, myList, recordContinue, savedPos, saveProgress, continueList, getRdKey, setRdKey, clearRdKey,
 } from '../src/app/state.js';
-import { parseRoute, tabFor, KNOWN } from '../src/app/router.js';
+import { parseRoute, parseTitle, routeHash, tabFor, KNOWN } from '../src/app/router.js';
 import { pickDebridStreams, qualityOf, debridWhy } from '../src/app/player/debrid.js';
 import { provQ } from '../src/app/catalog.js';
+import { safeNext } from '../src/worker/next.js';
 
 export async function runUnitChecks() {
   let n = 0;
@@ -102,7 +103,33 @@ export async function runUnitChecks() {
     eq(parseRoute('#constructor').active, 'home', 'prototype names are not routes');
     eq(['movies', 'tv', 'anime', 'channels', 'channel', 'genre', 'live', 'list', 'search', 'home'].map(tabFor),
        ['home', 'home', 'home', 'home', 'home', 'home', 'live', 'list', 'search', 'home'], 'tab bar mapping');
-    eq(KNOWN.length, 11, 'route list (+ read)');
+    eq(KNOWN.length, 12, 'route list (+ read, title)');
+
+    // Shared title links: the shapes the app's AASA claims and AppRoute.webRoute reads.
+    eq(parseTitle('#title/movie/550'), { kind: 'movie', anime: false, id: 550 }, 'a film');
+    eq(parseTitle('#title/tv/1399'), { kind: 'tv', anime: false, id: 1399 }, 'a series');
+    eq(parseTitle('#title/anime/30984'), { kind: 'tv', anime: true, id: 30984 }, 'anime = a TMDB tv id');
+    eq(parseTitle('#title/tv/1399/2/3'), { kind: 'tv', anime: false, id: 1399, s: 2, e: 3 }, 'an episode');
+    eq(parseTitle('#title/anime/30984/1/12'), { kind: 'tv', anime: true, id: 30984, s: 1, e: 12 }, 'an anime episode');
+    eq(parseTitle('#title/tv/1399/0/4'), { kind: 'tv', anime: false, id: 1399, s: 0, e: 4 }, 'season 0 is specials');
+    eq(parseTitle(routeHash('title', 'tv', 1399, 2, 3)), parseTitle('#title/tv/1399/2/3'), 'routeHash builds what parseTitle reads');
+    eq(parseTitle('#title/tv/%31%33%39%39'), { kind: 'tv', anime: false, id: 1399 }, 'segments are URI-decoded, like the app');
+    for (const bad of ['#title', '#title/tv', '#title/tv/', '#title/show/1399', '#title/other/1', '#title/tv/abc', '#title/tv/0',
+      '#title/tv/-5', '#title/tv/+5', '#title/tv/1e3', '#title/tv/1234567890', '#title/tv/1399/', '#title/tv/1399/2',
+      '#title/tv/1399/2/0', '#title/tv/1399/x/3', '#title/movie/550/1/1', '#title/tv/1399/2/3/4', '#title/tv/1399?x=1', '#titles/tv/1', '#list', '']) {
+      eq(parseTitle(bad), null, 'not a title link: ' + JSON.stringify(bad));
+    }
+    eq([parseRoute('#title/tv/1399').base, parseRoute('#title/bogus').base, parseRoute('#list').active], ['title', 'title', 'list'], 'title is a route; #list is My List');
+  }
+
+  // ── Login landing: the `next` hash allow-list (src/worker/next.js) ──────────────
+  {
+    const good = ['#title/tv/1399/2/3', '#title/movie/550', '#title/anime/30984', '#list', '#read/manga', '#search/ask', '#a_b-c', '#' + 'a'.repeat(80)];
+    eq(good.map(safeNext), good, 'plain hash routes (up to 80 characters after #) pass');
+    for (const bad of ['', '#', '//evil', '/#list', '#list/../x', 'https://x', 'https://x/#list', 'javascript:alert(1)', '#<script>', '#"><b>',
+      '#title/tv/1399?x=1', '#a b', '#%2F%2Fevil', '#a\nb', '#' + 'a'.repeat(81), 'list', null, undefined, 42, ['#list']]) {
+      eq(safeNext(bad), '', 'dropped: ' + JSON.stringify(bad));
+    }
   }
 
   // ── Debrid pickers + catalog ─────────────────────────────────────────────────

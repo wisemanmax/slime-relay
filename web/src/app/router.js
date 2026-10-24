@@ -3,7 +3,7 @@
 // dispatch table lives in main.js — a new route needs an entry in KNOWN here
 // AND in VIEWS there (main.js warns at boot if they drift).
 
-export const KNOWN = ['home', 'movies', 'tv', 'live', 'anime', 'list', 'search', 'channels', 'channel', 'genre', 'read'];
+export const KNOWN = ['home', 'movies', 'tv', 'live', 'anime', 'list', 'search', 'channels', 'channel', 'genre', 'read', 'title'];
 
 /* Movies/Series/Anime are pill routes, and the channel/genre surfaces are
    reached FROM Home, so all of them keep Home lit in the tab bar rather than
@@ -38,6 +38,27 @@ export function routeArgs(hash) {
   return h.split('/').slice(1).map(s => { try { return decodeURIComponent(s); } catch { return s; } });
 }
 export const routeHash = (base, ...args) => '#' + [base, ...args.map(a => encodeURIComponent(String(a)))].join('/');
+
+/** A shared title link — the hash routes the apps' universal links claim
+    (worker.js AASA), in the grammar the app reads them with (AppRoute.webRoute):
+      '#title/<movie|tv|anime>/<tmdbId>'                 the title's sheet
+      '#title/<tv|anime>/<tmdbId>/<season>/<episode>'    that episode (season 0 = specials)
+    'anime' is a TMDB tv id. -> { kind: 'movie'|'tv', anime, id[, s, e] }, or null
+    for anything else: another segment count, an unknown kind, an id that isn't
+    1-9 plain digits or is 0, a film with an episode, episode 0. */
+export function parseTitle(hash) {
+  if (String(hash || '').slice(1).split('/')[0] !== 'title') return null;
+  const args = routeArgs(hash);
+  if (args.length !== 2 && args.length !== 4) return null;
+  const [kind, rawId, rawS, rawE] = args;
+  const num = (raw) => /^[0-9]{1,9}$/.test(raw) ? Number(raw) : null;
+  const id = num(rawId);
+  if (!['movie', 'tv', 'anime'].includes(kind) || !id) return null;
+  const t = { kind: kind === 'movie' ? 'movie' : 'tv', anime: kind === 'anime', id };
+  if (args.length === 2) return t;
+  const s = num(rawS), e = num(rawE);
+  return kind !== 'movie' && s !== null && e ? { ...t, s, e } : null;
+}
 
 /** Navigate (identical to clicking a link to `hash`; same hash = no re-render). */
 export function go(hash) { location.hash = hash; }

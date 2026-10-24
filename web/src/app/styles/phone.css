@@ -32,7 +32,7 @@
     background:linear-gradient(0deg,rgba(0,0,0,.92) 4%,rgba(0,0,0,.35) 46%,transparent 78%)}
   .hero .stagewrap{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden}
   .hero .inner{position:absolute;left:0;right:0;bottom:0;padding:0 14px 12px;max-width:none}
-  .hero .eyebrow,.hero p.ov,.btn.icon,.btn.ghost{display:none}
+  .hero .eyebrow,.hero p.ov,.hero .btn.icon,.hero .btn.ghost{display:none}
   .hero h1{font-size:27px;line-height:1.08;margin:0 0 6px;max-width:72%}
   .hero .pills{gap:0;margin:0 0 2px}
   .hero .pills .pill{border:0;background:none;padding:0;color:rgba(255,255,255,.78);
@@ -42,7 +42,7 @@
   .hero .pills .pill:not(:last-child)::after{content:"·";padding:0 7px;
     color:rgba(255,255,255,.45)}
   .hero .pills .pill.rate{color:rgba(255,255,255,.78)}
-  .btns{position:absolute;right:14px;bottom:14px;margin:0}
+  .hero .btns{position:absolute;right:14px;bottom:14px;margin:0}
   .btn.play{padding:9px 20px;border-radius:22px;font-size:15px}
   .dots{position:static;display:flex;justify-content:center;gap:6px;padding:10px 0 2px}
   .dots i{width:6px;height:6px;background:rgba(255,255,255,.28)}

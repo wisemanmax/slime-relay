@@ -9,7 +9,7 @@
 
 import { closePlayer, fsActive, handlePlayerKey } from './player/player.js';
 import { isPlayerOpen } from './player/session.js';
-import { closeDetail } from './views/detail.js';
+import { dismissDetail } from './views/detail.js';
 import { closeSettings, isSettingsOpen } from './ui/settings.js';
 import { focusSearch } from './views/search.js';
 import { escProfiles, isProfilesOpen } from './profiles.js';
@@ -33,7 +33,7 @@ export function initKeys() {
       // the same keystroke would end playback when all the viewer asked for was
       // the window back, so let that Escape be consumed by leaving fullscreen.
       if (fsActive()) return;
-      closePlayer(); closeDetail(); closeSettings(); return;
+      closePlayer(); dismissDetail(); closeSettings(); return;
     }
     if (typing || e.ctrlKey || e.metaKey || e.altKey || isProfilesOpen()) return;
     if (isPlayerOpen()) {
@@ -46,6 +46,6 @@ export function initKeys() {
       }
       return;
     }
-    if (e.key === '/' && !isSettingsOpen()) { e.preventDefault(); closeDetail(); focusSearch(); }
+    if (e.key === '/' && !isSettingsOpen()) { e.preventDefault(); dismissDetail(); focusSearch(); }
   }, true);
 }

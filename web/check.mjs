@@ -117,6 +117,16 @@ const call = (path, init) => worker.fetch(new Request('https://watch.example' + 
   const setCookie = r.headers.get('set-cookie') || '';
   ok(r.status === 302 && r.headers.get('location') === '/', 'login did not redirect to /');
   ok(/^sw_auth=[a-f0-9]{64};/.test(setCookie) && !/domain=/i.test(setCookie), 'login cookie missing, or not host-only (must work on any host)');
+  // A link opened while signed out lands where it pointed — a plain hash route only (src/worker/next.js).
+  ok(login.includes('name="next"') && login.includes('location.hash'), 'login page does not carry the hash in a next field');
+  for (const [next, want] of [['#title/tv/1399/2/3', '/#title/tv/1399/2/3'], ['#list', '/#list'], ['//evil.example', '/'], ['https://evil.example/#list', '/'], ['#<script>', '/']]) {
+    r = await call('/login', { method: 'POST', body: new URLSearchParams({ password: 'check-pw', next }) });
+    ok(r.status === 302 && r.headers.get('location') === want, `login with next=${JSON.stringify(next)} redirected to ${r.headers.get('location')}, expected ${want}`);
+  }
+  r = await call('/login', { method: 'POST', body: new URLSearchParams({ password: 'nope', next: '#list' }) });
+  ok(r.status === 401 && (await r.text()).includes('name="next" id="next" value="#list"'), 'a wrong password loses the next hash');
+  r = await call('/login', { method: 'POST', body: new URLSearchParams({ password: 'nope', next: '"><script>x()</script>' }) });
+  ok(r.status === 401 && !(await r.text()).includes('x()'), 'a disallowed next is echoed into the login page');
 
   const cookie = setCookie.split(';')[0];
   const nonces = [];

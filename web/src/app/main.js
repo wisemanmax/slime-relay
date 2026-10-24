@@ -18,7 +18,7 @@ import { viewMovies, viewTV, viewAnime, viewChannels, viewChannel, viewGenre } f
 import { viewLive } from './views/live.js';
 import { viewMyList } from './views/mylist.js';
 import { viewSearchScreen, initHeaderSearch } from './views/search.js';
-import { closeDetail } from './views/detail.js';
+import { closeDetail, viewTitle } from './views/detail.js';
 import { viewRead } from './views/reading.js';
 import { closeReader, initReaderKeys } from './reader/reader.js';
 import { initPlayer } from './player/player.js';
@@ -27,7 +27,8 @@ import { initKeys } from './keys.js';
 import { initPwa } from './pwa.js';
 import { initProfiles } from './profiles.js';
 
-/** route base -> view(arg). Keep in step with router.KNOWN. */
+/** route base -> view(arg). Keep in step with router.KNOWN ('title' is the one
+    route that isn't a #main view: route() opens it over one). */
 const VIEWS = {
   home: viewHome,
   movies: viewMovies,
@@ -41,12 +42,26 @@ const VIEWS = {
   genre: viewGenre,
   read: viewRead,
 };
-for (const k of KNOWN) if (!VIEWS[k]) console.warn('route "' + k + '" has no view in main.js');
+for (const k of KNOWN) if (!VIEWS[k] && k !== 'title') console.warn('route "' + k + '" has no view in main.js');
+
+let under = '';   // the hash of the view #main shows ('' until the first render)
 
 function route() {
   const r = parseRoute(location.hash);
   closeDetail();
   closeReader();   // a reader route re-opens it (views/reading.js)
+  // A shared '#title/…' link opens the detail sheet OVER the view on screen —
+  // Home on a cold load — and closing the sheet goes back to that view's hash.
+  if (r.base === 'title') {
+    if (!under) render(parseRoute('#home'), '#home');
+    viewTitle(location.hash, under);
+    return;
+  }
+  render(r, location.hash || '#home');
+}
+
+function render(r, hash) {
+  under = hash;
   renderNav(r.nav);
   renderPills(r.active);
   renderTabbar(r.active);
